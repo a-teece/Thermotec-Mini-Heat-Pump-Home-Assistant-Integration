@@ -23,8 +23,13 @@ esp32:
     type: esp-idf
     version: recommended
 
+# Quieter logging - INFO baseline with noisy components suppressed
 logger:
-  level: DEBUG
+  level: INFO
+  logs:
+    ble_sensor: ERROR        # suppresses "Error reading char at handle 16, status=2" startup warning
+    sensor: WARN             # stops per-update sensor publish spam
+    number: WARN             # stops per-update number publish spam
 
 # Enable Home Assistant API
 api:
@@ -115,10 +120,10 @@ sensor:
         id(coil_temp).publish_state(rd(3) / 10.0);
         id(ambient_temp).publish_state(rd(4) / 10.0);
         id(exhaust_temp).publish_state(rd(5) / 10.0);
-        ESP_LOGD("heatpump", "Temps updated");
+        ESP_LOGI("heatpump", "Temps updated");
       } else if (block == 0x0416) {
         id(target_temp).publish_state(rd(0) / 10.0);
-        ESP_LOGD("heatpump", "Target = %.1f", rd(0) / 10.0);
+        ESP_LOGI("heatpump", "Target = %.1f", rd(0) / 10.0);
       }
       return {};
 
@@ -158,8 +163,9 @@ sensor:
     state_class: measurement
     accuracy_decimals: 1
 
+# Pool temps don't change quickly — once per minute is plenty
 interval:
-  - interval: 30s
+  - interval: 60s
     then:
       - script.execute: poll_heater
 
