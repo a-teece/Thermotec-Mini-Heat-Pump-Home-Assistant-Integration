@@ -6,15 +6,81 @@ substitutions:
   write_char_uuid: "0000ff03-0000-1000-8000-00805f9b34fb"
   notify_char_uuid: "0000ff02-0000-1000-8000-00805f9b34fb"
 
+# ─── Globals ────────────────────────────────────────────────────────────────
 globals:
+  # Tracks whether the BLE link to the heater is up.
+  # Used by on_boot to wait until connected before sleeping.
+  # NOT restored — BLE state from a previous wake cycle is meaningless.
   - id: ble_connected
     type: bool
     initial_value: 'false'
-    restore_value: false
+    restore_value: no
 
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
+  on_boot:
+    # Run after WiFi/API are initialized but before deep_sleep enters.
+    # Priority -100 places us late in the boot sequence.
+    priority: -100.0
+    then:
+      # ── Phase 1: Wait for the HA API ────────────────────────────────────
+      # We need the API to read the prevent-sleep helper and the desired
+      # target temp helper. Without it we'd risk sleeping when we shouldn't.
+      - wait_until:
+          condition:
+            api.connected:
+          timeout: 15s
+
+      # ── Phase 2: Give HA a moment to push helper states ─────────────────
+      # After the API connects, HA sends the current values of mirrored
+      # helpers. A short delay ensures they've arrived before we read them.
+      - delay: 2s
+
+      # ── Phase 3: Decide between awake mode and a sleep cycle ────────────
+      - if:
+          condition:
+            - binary_sensor.is_on: prevent_deep_sleep_switch
+          then:
+            # ── AWAKE MODE: stay on for OTA, debugging, or fast feedback ─
+            - deep_sleep.prevent: deep_sleep_1
+            - logger.log:
+                level: INFO
+                format: "Deep sleep prevented — OTA/debug mode active"
+            # The interval timer below handles continuous 30s polling.
+          else:
+            # ── SLEEP CYCLE: wake → connect → sync target → sleep ───────
+
+            # Phase 4: Wait for BLE link to the heater.
+            # auto_connect starts scanning at boot. Connection usually
+            # completes in 5-15s depending on RF conditions.
+            - logger.log:
+                level: INFO
+                format: "Waiting for BLE connection to heater..."
+            - wait_until:
+                condition:
+                  lambda: 'return id(ble_connected);'
+                timeout: 30s
+
+            # Phase 5: Allow the on_connect handler to finish its work.
+            # That handler polls the heater (3s after connect), waits for
+            # the notify responses (~1s), then runs the target-sync logic
+            # (5s + ~2s for a write if needed). 12s covers it comfortably.
+            - delay: 12s
+
+            # Phase 6: Refresh diagnostic readings before sleep.
+            # These are pushed to HA just before we drop the WiFi link.
+            - component.update: battery_voltage
+            - component.update: last_connected
+
+            # Phase 7: Final settle time so HA receives everything.
+            - delay: 3s
+
+            # Phase 8: Enter deep sleep until the next wake cycle.
+            - logger.log:
+                level: INFO
+                format: "Entering deep sleep"
+            - deep_sleep.enter: deep_sleep_1
 
 esp32:
   board: dfrobot_firebeetle2_esp32c6
@@ -23,15 +89,19 @@ esp32:
     type: esp-idf
     version: recommended
 
-# Quieter logging - INFO baseline with noisy components suppressed
+# ─── Logging ────────────────────────────────────────────────────────────────
 logger:
   level: INFO
+  baud_rate: 115200
   logs:
-    ble_sensor: ERROR        # suppresses "Error reading char at handle 16, status=2" startup warning
-    sensor: WARN             # stops per-update sensor publish spam
-    number: WARN             # stops per-update number publish spam
+    # Silence the noisy "Error reading char at handle 16, status=2" warning
+    # that fires once at boot — ble_client tries to read the notify
+    # characteristic at startup and the heater rejects it (notify-only).
+    ble_sensor: ERROR
+    # Quieten per-publish state changes on routine sensor updates.
+    sensor: WARN
 
-# Enable Home Assistant API
+# ─── Home Assistant API ─────────────────────────────────────────────────────
 api:
   encryption:
     key: !secret api_key_pool_heatpump_proxy
@@ -40,11 +110,10 @@ ota:
   - platform: esphome
     password: !secret ota_password
 
-# ─── Wifi (including portal fallback) ──────────────────────────────────────────
+# ─── WiFi (with captive portal fallback) ────────────────────────────────────
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: ${device_name}
@@ -52,6 +121,27 @@ wifi:
 
 captive_portal:
 
+# ─── Time ───────────────────────────────────────────────────────────────────
+# Sync from HA over the API. Required for the last_connected text sensor
+# to display a human-readable wake timestamp.
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# ─── Deep Sleep ─────────────────────────────────────────────────────────────
+# No run_duration set — sleep is entered explicitly from on_boot once the
+# wake cycle's work is complete. This avoids ever sleeping mid-BLE-write.
+#
+# sleep_duration controls how long the chip stays off between cycles.
+# 5 min is a reasonable default; raise it to extend battery life at the
+# cost of slower response to HA helper changes.
+deep_sleep:
+  id: deep_sleep_1
+  sleep_duration: 5min
+
+# ─── BLE ────────────────────────────────────────────────────────────────────
+# Aggressive scan duty cycle (window == interval). We're awake briefly
+# each cycle so fast connection matters more than scan-time power savings.
 esp32_ble_tracker:
   scan_parameters:
     interval: 1100ms
@@ -66,16 +156,136 @@ ble_client:
       then:
         - logger.log: "Heat pump connected"
         - lambda: 'id(ble_connected) = true;'
+        # Wait briefly for service discovery to complete, then poll.
         - delay: 3s
         - script.execute: poll_heater
+        # Wait for the 4 fragmented notifications to populate
+        # current_target_temp and the heater temperatures.
+        - delay: 5s
+        # ── Reconcile target temp: HA helper is the source of truth ──
+        # Runs on every BLE (re)connect, so handles:
+        #   - First connection on each wake from deep sleep
+        #   - Reconnects after a brief BLE drop while awake
+        #   - Catching up if the helper changed while BLE was down
+        - if:
+            condition:
+              lambda: |-
+                if (!id(desired_target_temp).has_state()) return false;
+                if (!id(current_target_temp).has_state()) return false;
+                float desired = id(desired_target_temp).state;
+                float current = id(current_target_temp).state;
+                // 0.05°C tolerance avoids spurious writes from float
+                // precision (heater stores in 0.1°C steps).
+                return fabsf(desired - current) > 0.05f;
+            then:
+              - logger.log:
+                  level: INFO
+                  format: "Syncing target: HA=%.1f, heater=%.1f"
+                  args: ['id(desired_target_temp).state',
+                         'id(current_target_temp).state']
+              - script.execute:
+                  id: write_target_temp
+                  temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
     on_disconnect:
       then:
         - logger.log: "Heat pump disconnected"
         - lambda: 'id(ble_connected) = false;'
 
-# Subscribe to notifications using a sensor component
-# Use a ble_sensor to enable notifications and parse the data
+# ─── Binary Sensors ─────────────────────────────────────────────────────────
+binary_sensor:
+  # ── Prevent Deep Sleep helper ─────────────────────────────────────────────
+  # Mirrors an HA input_boolean helper. Because the state lives in HA, it
+  # can be toggled while the device is asleep and the new value will be
+  # read on the next wake from on_boot.
+  #
+  # Create it in HA:
+  #   Settings → Devices & Services → Helpers → Create → Toggle helper
+  #   Name: "Pool Heater Prevent Deep Sleep"
+  #   Entity ID (must match `entity_id` below):
+  #     input_boolean.pool_heater_prevent_deep_sleep
+  - platform: homeassistant
+    id: prevent_deep_sleep_switch
+    entity_id: input_boolean.pool_heater_prevent_deep_sleep
+    on_state:
+      then:
+        - if:
+            condition:
+              - binary_sensor.is_off: prevent_deep_sleep_switch
+            then:
+              # Toggle was just turned off while device was awake → sleep.
+              - logger.log:
+                  level: INFO
+                  format: "Prevent deep sleep disabled — sleeping shortly"
+              - component.update: battery_voltage
+              - component.update: last_connected
+              - delay: 5s
+              - deep_sleep.enter: deep_sleep_1
+            else:
+              # Toggle just turned on while awake → cancel any pending sleep.
+              - logger.log:
+                  level: INFO
+                  format: "Prevent deep sleep enabled — staying awake"
+              - deep_sleep.prevent: deep_sleep_1
+
+  # ── BLE link status ───────────────────────────────────────────────────────
+  - platform: template
+    id: heater_ble_status
+    name: "Heat Pump BLE Connection"
+    device_class: connectivity
+    lambda: 'return id(ble_connected);'
+
+# ─── Sensors ────────────────────────────────────────────────────────────────
 sensor:
+  # ── Desired Target Temperature (HA helper mirror) ─────────────────────────
+  # This is the user-facing control. Mirrors an HA input_number helper.
+  #
+  # Create it in HA:
+  #   Settings → Devices & Services → Helpers → Create → Number
+  #   Name: "Pool Target Temperature"
+  #   Entity ID (must match `entity_id` below):
+  #     input_number.pool_target_temperature
+  #   Min: 15  Max: 40  Step: 0.5  Unit: °C  Display: Slider
+  #
+  # Because the value lives in HA, the user can change it at any time:
+  #   - If the device is awake, the on_value handler writes immediately.
+  #   - If asleep, on_boot reads the new value on the next wake and the
+  #     ble_client on_connect handler syncs it to the heater.
+  - platform: homeassistant
+    id: desired_target_temp
+    entity_id: input_number.pool_target_temperature
+    on_value:
+      then:
+        # Only write if BLE is up, both sensors have state, and the
+        # helper differs from the heater's current value. The has_state
+        # checks prevent firing during the initial sync at boot before
+        # we've received the heater's current target.
+        - if:
+            condition:
+              lambda: |-
+                if (!id(current_target_temp).has_state()) return false;
+                if (!id(desired_target_temp).has_state()) return false;
+                if (!id(ble_connected)) return false;
+                float desired = id(desired_target_temp).state;
+                float current = id(current_target_temp).state;
+                return fabsf(desired - current) > 0.05f;
+            then:
+              - logger.log:
+                  level: INFO
+                  format: "Helper changed to %.1f — writing to heater"
+                  args: ['id(desired_target_temp).state']
+              - script.execute:
+                  id: write_target_temp
+                  temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
+              - delay: 2s
+              # Re-poll to confirm the write took effect
+              - script.execute: poll_heater
+
+  # ── BLE Notification Parser (internal) ────────────────────────────────────
+  # This sensor subscribes to BLE notifications from the heater and parses
+  # each Modbus reply into the real sensors below. It has no value of its
+  # own — returning {} from the lambda means "don't publish".
+  #
+  # Each notification arrives as a std::vector<uint8_t> in `x`.
   - platform: ble_client
     type: characteristic
     ble_client_id: heatpump_ble
@@ -86,7 +296,7 @@ sensor:
     notify: true
     internal: true
     lambda: |-
-      // x is the raw notification bytes
+      // Sanity check
       if (x.size() < 5 || x[0] != 0x63) return {};
 
       // Write ACK (8-byte Modbus 0x10 response)
@@ -103,7 +313,8 @@ sensor:
         return {};
       }
 
-      // Data block (fragmented read response)
+      // Data block (fragmented read response).
+      // Format: 63 10 [block_hi] [block_lo] 00 2D 5A [9 regs of data...]
       if (x[1] != 0x10 || x.size() < 9) return {};
 
       uint16_t block = (x[2] << 8) | x[3];
@@ -114,7 +325,8 @@ sensor:
       };
 
       if (block == 0x07FE) {
-        // reg 0 = T01 suction - usually disconnected (0x7FFD)
+        // Temperature block. Reg 0 (T01 suction) is usually disconnected
+        // (0x7FFD) on this model so we skip publishing it.
         id(inlet_temp).publish_state(rd(1) / 10.0);
         id(outlet_temp).publish_state(rd(2) / 10.0);
         id(coil_temp).publish_state(rd(3) / 10.0);
@@ -122,11 +334,13 @@ sensor:
         id(exhaust_temp).publish_state(rd(5) / 10.0);
         ESP_LOGI("heatpump", "Temps updated");
       } else if (block == 0x0416) {
-        id(target_temp).publish_state(rd(0) / 10.0);
-        ESP_LOGI("heatpump", "Target = %.1f", rd(0) / 10.0);
+        // Setpoints block — reg 0 is the current target temperature × 10.
+        id(current_target_temp).publish_state(rd(0) / 10.0);
+        ESP_LOGI("heatpump", "Heater target = %.1f", rd(0) / 10.0);
       }
       return {};
 
+  # ── Temperature sensors (parsed from BLE notifications) ───────────────────
   - platform: template
     id: inlet_temp
     name: "Inlet Water Temperature"
@@ -163,22 +377,103 @@ sensor:
     state_class: measurement
     accuracy_decimals: 1
 
-# Pool temps don't change quickly — once per minute is plenty
-interval:
-  - interval: 60s
-    then:
-      - script.execute: poll_heater
+  # ── Current Heater Target (read-only) ─────────────────────────────────────
+  # Reflects what the heater itself currently thinks the target is, as
+  # reported via BLE. May briefly differ from `desired_target_temp` while
+  # a sync is in flight, or persistently if someone changes the target on
+  # the heater's physical control panel (the HA helper takes priority and
+  # will overwrite on the next sync).
+  - platform: template
+    id: current_target_temp
+    name: "Current Target Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
 
+  # ── Battery Voltage ───────────────────────────────────────────────────────
+  # The Firebeetle 2 ESP32-C6 has an onboard 1:1 voltage divider on GPIO0.
+  # 12dB attenuation gives the ADC a ~3.1V max range; the multiply: 2.0
+  # filter restores the actual cell voltage (LiPo 3.0–4.2V).
+  - platform: adc
+    pin: GPIO0
+    name: "Battery Voltage"
+    id: battery_voltage
+    update_interval: 5min
+    attenuation: 12db
+    filters:
+      - multiply: 2.0
+      # Smooth ADC noise across 3 readings, publish every time so the
+      # brief wake window always gets a value out before sleep.
+      - sliding_window_moving_average:
+          window_size: 3
+          send_every: 1
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 2
+    on_value:
+      then:
+        # Refresh derived battery percentage whenever voltage updates.
+        # Prevents a race where battery_level evaluates before
+        # battery_voltage has a valid reading.
+        - component.update: battery_level
+
+  # ── Battery Percentage (derived from voltage) ─────────────────────────────
+  # Simple linear curve: 3.0V = 0%, 4.2V = 100%. Good enough as a rough
+  # state-of-charge indicator. For better accuracy, replace with a
+  # piecewise discharge curve specific to your cell chemistry.
+  - platform: template
+    name: "Battery Level"
+    id: battery_level
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 0
+    # Never poll independently — only updated via on_value above.
+    update_interval: never
+    lambda: |-
+      float v = id(battery_voltage).state;
+      if (isnan(v)) return {};
+      float pct = (v - 3.0f) / (4.2f - 3.0f) * 100.0f;
+      return clamp(pct, 0.0f, 100.0f);
+
+# ─── Text Sensors ───────────────────────────────────────────────────────────
+text_sensor:
+  # Wall-clock time of the last successful wake. Acts as a heartbeat:
+  # if this value stops updating, the device isn't waking properly.
+  - platform: template
+    name: "Last Connected"
+    id: last_connected
+    icon: "mdi:clock-outline"
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      auto now = id(ha_time).now();
+      // Return nothing if time hasn't synced yet — avoids a garbage stamp.
+      if (!now.is_valid()) return {};
+      char buf[32];
+      snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+               now.year, now.month, now.day_of_month,
+               now.hour, now.minute, now.second);
+      return {buf};
+
+# ─── Scripts ────────────────────────────────────────────────────────────────
 script:
+  # Send the Modbus "read all status" command to the heater.
+  # The heater replies with 4 fragmented notifications covering blocks
+  # 0x03E9, 0x0416, 0x07D1, 0x07FE — the BLE notify parser above picks
+  # them apart and publishes to the real sensors.
   - id: poll_heater
     then:
       - ble_client.ble_write:
           id: heatpump_ble
           service_uuid: ${service_uuid}
           characteristic_uuid: ${write_char_uuid}
-          # Modbus: read 45 regs from address 0x0007
           value: [0x63, 0x03, 0x00, 0x07, 0x00, 0x2D, 0x3C, 0x54]
 
+  # Write a new target temperature (passed as °C × 10, e.g. 305 = 30.5°C).
+  # Modbus 0x10 Write Multiple Registers, 1 register at address 0x0416.
   - id: write_target_temp
     parameters:
       temp_x10: int
@@ -188,17 +483,18 @@ script:
           service_uuid: ${service_uuid}
           characteristic_uuid: ${write_char_uuid}
           value: !lambda |-
-            // Clamp to valid range (15.0 - 40.0°C)
+            // Clamp to the heater's accepted range
             if (temp_x10 < 150) temp_x10 = 150;
             if (temp_x10 > 400) temp_x10 = 400;
 
-            // Build Modbus 0x10 Write Multiple Registers (1 register)
+            // Build the Modbus frame
             std::vector<uint8_t> msg = {
               0x63, 0x10, 0x04, 0x16, 0x00, 0x01, 0x02,
               (uint8_t)((temp_x10 >> 8) & 0xFF),
               (uint8_t)(temp_x10 & 0xFF)
             };
 
+            // CRC16: polynomial 0xA001, init 0xFFFF, low byte first
             uint16_t crc = 0xFFFF;
             for (auto b : msg) {
               crc ^= b;
@@ -211,28 +507,12 @@ script:
             ESP_LOGI("heatpump", "Set target = %.1f", temp_x10 / 10.0);
             return msg;
 
-number:
-  - platform: template
-    id: target_temp
-    name: "Target Temperature"
-    unit_of_measurement: "°C"
-    device_class: temperature
-    min_value: 15.0
-    max_value: 40.0
-    step: 0.5
-    mode: slider
-    optimistic: false
-    set_action:
-      - script.execute:
-          id: write_target_temp
-          temp_x10: !lambda 'return (int)(x * 10);'
-      - delay: 2s
+# ─── Periodic Polling (only effective while awake) ──────────────────────────
+# When prevent_deep_sleep is on, the device stays awake and this interval
+# fires every 30s to refresh sensors. During sleep cycles we sleep long
+# before 30s elapses, so this never runs — each wake cycle does its own
+# single poll from the on_connect handler.
+interval:
+  - interval: 30s
+    then:
       - script.execute: poll_heater
-
-binary_sensor:
-  - platform: template
-    id: heater_ble_status
-    name: "Heat Pump BLE Connection"
-    device_class: connectivity
-    lambda: |-
-      return id(ble_connected);
