@@ -1,14 +1,50 @@
+# ─── Globals ────────────────────────────────────────────────────────────────
+# ─── Required Secrets ───────────────────────────────────────────────────────
+# These secrets are required in your secrets.yaml file which can easily be
+# edited in the ESP Home dashboard (top right).
+#  wifi_ssid: "your WiFi network name"
+#  wifi_password: "your WiFi network key"
+#  ap_fallback_password: "a strong password for the fallback WiFi hotspot, e.g. my_secure_fallback_password"
+#  ota_password: "a strong password for OTA updates, e.g. my_very_secure_password"
+#  pool_heatpump_proxy_api_key: "a random 16-byte hex string for API encryption, e.g. 0123456789abcdef0123456789abcdef"
+#  pool_heatpump_proxy_device_mac_address: "your heat pump's BLE MAC address, e.g. AA:BB:CC:DD:EE:FF"
+
+# ─── Globals ────────────────────────────────────────────────────────────────
 substitutions:
   device_name: pool-heatpump-proxy
   friendly_name: Pool Heatpump Proxy
-  heater_mac: "AA:AA:AA:AA:AA:AA"
   service_uuid: "0000ff01-0000-1000-8000-00805f9b34fb"
   write_char_uuid: "0000ff03-0000-1000-8000-00805f9b34fb"
   notify_char_uuid: "0000ff02-0000-1000-8000-00805f9b34fb"
 
+  # So that we can update values in Home Assistant while this device is asleep,
+  # we use some Home Assistant helpers.
+  # Create them in HA "Settings → Devices & Services → Helpers → Create".
+  # Suggested name/id. If the name changes, update the `entity_id` below to match.
+
+  #  Type: Toggle helper (aka input_boolean)
+  #  Name: Pool Heater Prevent Deep Sleep
+  #  Entity ID: input_boolean.pool_heater_prevent_deep_sleep
+  home_assistant_prevent_deep_sleep_switch_name: input_boolean.pool_heater_prevent_deep_sleep
+
+  #  Type: Toggle helper (aka input_boolean)
+  #  Name: Pool Heater Power
+  #  Entity ID: input_boolean.pool_heater_power
+  home_assistant_desired_power_state_switch_name: input_boolean.pool_heater_power
+
+  #  Type: Number (aka input_number)
+  #  Name: Pool Target Temperature
+  #  Entity ID: input_number.pool_target_temperature
+  #  Minimum: 15
+  #  Maximum: 40
+  #  Step: 0.5
+  #  Unit: °C
+  #  Display: Slider
+  home_assistant_desired_target_temp_number_name: input_number.pool_target_temperature
+
 # ─── Globals ────────────────────────────────────────────────────────────────
 globals:
-  # Tracks whether the BLE link to the heater is up.
+  # Tracks whether the BLE link to the heat pump is up.
   # Used by on_boot to wait until connected before sleeping.
   # NOT restored — BLE state from a previous wake cycle is meaningless.
   - id: ble_connected
@@ -51,19 +87,19 @@ esphome:
           else:
             # ── SLEEP CYCLE: wake → connect → sync target → sleep ───────
 
-            # Phase 4: Wait for BLE link to the heater.
+            # Phase 4: Wait for BLE link to the heat pump.
             # auto_connect starts scanning at boot. Connection usually
             # completes in 5-15s depending on RF conditions.
             - logger.log:
                 level: INFO
-                format: "Waiting for BLE connection to heater..."
+                format: "Waiting for BLE connection to heat pump..."
             - wait_until:
                 condition:
                   lambda: 'return id(ble_connected);'
                 timeout: 30s
 
             # Phase 5: Allow the on_connect handler to finish its work.
-            # That handler polls the heater (3s after connect), waits for
+            # That handler polls the heat pump (3s after connect), waits for
             # the notify responses (~1s), then runs the target-sync logic
             # (5s + ~2s for a write if needed). 12s covers it comfortably.
             - delay: 12s
@@ -96,7 +132,7 @@ logger:
   logs:
     # Silence the noisy "Error reading char at handle 16, status=2" warning
     # that fires once at boot — ble_client tries to read the notify
-    # characteristic at startup and the heater rejects it (notify-only).
+    # characteristic at startup and the heat pump rejects it (notify-only).
     ble_sensor: ERROR
     # Quieten per-publish state changes on routine sensor updates.
     sensor: WARN
@@ -104,7 +140,7 @@ logger:
 # ─── Home Assistant API ─────────────────────────────────────────────────────
 api:
   encryption:
-    key: !secret api_key_pool_heatpump_proxy
+    key: !secret pool_heatpump_proxy_api_key
 
 ota:
   - platform: esphome
@@ -149,7 +185,7 @@ esp32_ble_tracker:
     active: true
 
 ble_client:
-  - mac_address: ${heater_mac}
+  - mac_address: !secret pool_heatpump_proxy_device_mac_address
     id: heatpump_ble
     auto_connect: true
     on_connect:
@@ -158,10 +194,10 @@ ble_client:
         - lambda: 'id(ble_connected) = true;'
         # Wait briefly for service discovery to complete, then poll.
         - delay: 3s
-        # Poll the heater to populate current_target_temp, current_heater_power, etc.
-        - script.execute: poll_heater
+        # Poll the heat pump to populate current_target_temp, current_power_state, etc.
+        - script.execute: poll_heat_pump
         # Wait for the 4 fragmented notifications to populate
-        # current_target_temp and the heater temperatures.
+        # current_target_temp and the heat pump temperatures.
         - delay: 5s
         # ── Reconcile target temp: HA helper is the source of truth ──
         # Runs on every BLE (re)connect, so handles:
@@ -176,12 +212,12 @@ ble_client:
                 float desired = id(desired_target_temp).state;
                 float current = id(current_target_temp).state;
                 // 0.05°C tolerance avoids spurious writes from float
-                // precision (heater stores in 0.1°C steps).
+                // precision (heat pump stores in 0.1°C steps).
                 return fabsf(desired - current) > 0.05f;
             then:
               - logger.log:
                   level: INFO
-                  format: "Syncing target: HA=%.1f, heater=%.1f"
+                  format: "Syncing target: HA=%.1f, heat pump=%.1f"
                   args: ['id(desired_target_temp).state',
                          'id(current_target_temp).state']
               - script.execute:
@@ -196,18 +232,18 @@ ble_client:
         - if:
             condition:
               lambda: |-
-                if (!id(desired_heater_power).has_state()) return false;
-                if (!id(current_heater_power).has_state()) return false;
-                return id(desired_heater_power).state != id(current_heater_power).state;
+                if (!id(desired_power_state).has_state()) return false;
+                if (!id(current_power_state).has_state()) return false;
+                return id(desired_power_state).state != id(current_power_state).state;
             then:
               - logger.log:
                   level: INFO
-                  format: "Syncing power: HA=%s, heater=%s"
-                  args: ['id(desired_heater_power).state ? "ON" : "OFF"',
-                         'id(current_heater_power).state ? "ON" : "OFF"']
+                  format: "Syncing power: HA=%s, heat pump=%s"
+                  args: ['id(desired_power_state).state ? "ON" : "OFF"',
+                         'id(current_power_state).state ? "ON" : "OFF"']
               - script.execute:
-                  id: write_heater_power
-                  power_on: !lambda 'return id(desired_heater_power).state;'
+                  id: write_power_state
+                  power_on: !lambda 'return id(desired_power_state).state;'
 
     on_disconnect:
       then:
@@ -217,18 +253,12 @@ ble_client:
 # ─── Binary Sensors ─────────────────────────────────────────────────────────
 binary_sensor:
   # ── Prevent Deep Sleep helper ─────────────────────────────────────────────
-  # Mirrors an HA input_boolean helper. Because the state lives in HA, it
-  # can be toggled while the device is asleep and the new value will be
-  # read on the next wake from on_boot.
-  #
-  # Create it in HA:
-  #   Settings → Devices & Services → Helpers → Create → Toggle helper
-  #   Name: "Pool Heater Prevent Deep Sleep"
-  #   Entity ID (must match `entity_id` below):
-  #     input_boolean.pool_heater_prevent_deep_sleep
+  # Mirrors the HA helper defined by the global home_assistant_prevent_deep_sleep_switch_name.
+  # Because the state lives in HA, it can be toggled while the device is asleep and the new 
+  # value will be read on the next wake from on_boot.
   - platform: homeassistant
     id: prevent_deep_sleep_switch
-    entity_id: input_boolean.pool_heater_prevent_deep_sleep
+    entity_id: ${home_assistant_prevent_deep_sleep_switch_name}
     on_state:
       then:
         - if:
@@ -250,55 +280,55 @@ binary_sensor:
                   format: "Prevent deep sleep enabled — staying awake"
               - deep_sleep.prevent: deep_sleep_1
 
-  # ─── Desired Heater Power (mirror of HA helper) ───────────────────────────
-  # Mirrors input_boolean.pool_heater_power. Like the target temp helper, the
-  # value lives in HA so it can be changed while the device is asleep — the
-  # new state is read on the next wake and applied via the on_connect handler.
-  #
-  # Create in HA:
-  #   Settings → Devices & Services → Helpers → Create → Toggle helper
-  #   Name: "Pool Heater Power"
-  #   Entity ID (must match `entity_id` below):
-  #     input_boolean.pool_heater_power
+  # ─── Desired Power State (mirror of HA helper) ───────────────────────────
+  # Mirrors the HA helper defined by the global home_assistant_desired_power_state_switch_name.
+  # Like the target temp helper, the value lives in HA so it can be changed while the device is 
+  # asleep — the new state is read on the next wake and applied via the on_connect handler.
   - platform: homeassistant
-    id: desired_heater_power
-    entity_id: input_boolean.pool_heater_power
+    id: desired_power_state
+    entity_id: ${home_assistant_desired_power_state_switch_name}
     on_state:
       then:
-        # Apply immediately if the heater is reachable and the value differs.
+        # Apply immediately if the heat pump is reachable and the value differs.
         # Otherwise the on_connect handler will catch it on the next wake.
         - if:
             condition:
               lambda: |-
-                if (!id(current_heater_power).has_state()) return false;
+                if (!id(current_power_state).has_state()) return false;
                 if (!id(ble_connected)) return false;
-                return id(desired_heater_power).state != id(current_heater_power).state;
+                return id(desired_power_state).state != id(current_power_state).state;
             then:
               - logger.log:
                   level: INFO
-                  format: "Helper changed power to %s — writing to heater"
-                  args: ['id(desired_heater_power).state ? "ON" : "OFF"']
+                  format: "Helper changed power to %s — writing to heat pump"
+                  args: ['id(desired_power_state).state ? "ON" : "OFF"']
               - script.execute:
-                  id: write_heater_power
-                  power_on: !lambda 'return id(desired_heater_power).state;'
+                  id: write_power_state
+                  power_on: !lambda 'return id(desired_power_state).state;'
               - delay: 2s
-              - script.execute: poll_heater
+              - script.execute: poll_heat_pump
 
-  # ─── Current Heater Power (read from BLE notify) ──────────────────────────
-  # Reflects the heater's actual power state as reported via BLE. May briefly
-  # differ from desired_heater_power while a sync is in flight, or
-  # persistently if someone uses the heater's physical control panel
+  # ─── Current Power State (read from BLE notify) ──────────────────────────
+  # Reflects the heat pump's actual power state as reported via BLE. May briefly
+  # differ from desired_power_state while a sync is in flight, or
+  # persistently if someone uses the heat pump's physical control panel
   # (HA helper takes priority on the next sync).
   - platform: template
-    id: current_heater_power
-    name: "Heater Power State"
+    id: current_power_state
+    name: "Power State"
     icon: "mdi:power"
     device_class: power
 
+  # ── BLE link status ───────────────────────────────────────────────────────
+  - platform: template
+    id: ble_status
+    name: "Heat Pump BLE Connection"
+    device_class: connectivity
+    lambda: 'return id(ble_connected);'
+
   # ─── Diagnostic outputs ───────────────────────────────────────────────────
-  # Decoded from the bitmask at register 0x07E3 in the notify response.
-  # entity_category: diagnostic makes them appear under the device's
-  # Diagnostic section rather than as main controls.
+  # output_compressor, output_circulate_pump, output_high_fan and output_4way_valve are 
+  # decoded from the bitmask at register 0x07E3 in the notify response.
   - platform: template
     id: output_compressor
     name: "Compressor"
@@ -335,38 +365,30 @@ binary_sensor:
     filters:
       - delayed_on_off: 1s    # debounce: only publish if state holds for 1 second to remove the duplicate BLE responses
 
-  # ── BLE link status ───────────────────────────────────────────────────────
   - platform: template
-    id: heater_ble_status
-    name: "Heat Pump BLE Connection"
-    device_class: connectivity
-    lambda: 'return id(ble_connected);'
+    id: has_error
+    name: "Has Error"
+    icon: "mdi:alert"
+    device_class: problem
+    entity_category: diagnostic
 
 # ─── Sensors ────────────────────────────────────────────────────────────────
 sensor:
   # ── Desired Target Temperature (HA helper mirror) ─────────────────────────
-  # This is the user-facing control. Mirrors an HA input_number helper.
-  #
-  # Create it in HA:
-  #   Settings → Devices & Services → Helpers → Create → Number
-  #   Name: "Pool Target Temperature"
-  #   Entity ID (must match `entity_id` below):
-  #     input_number.pool_target_temperature
-  #   Min: 15  Max: 40  Step: 0.5  Unit: °C  Display: Slider
-  #
-  # Because the value lives in HA, the user can change it at any time:
+  # Mirrors the HA helper defined by the global home_assistant_desired_target_temp_number_name.
+  # Because the value lives in HA, it can be updated  while the device is asleep
   #   - If the device is awake, the on_value handler writes immediately.
   #   - If asleep, on_boot reads the new value on the next wake and the
-  #     ble_client on_connect handler syncs it to the heater.
+  #     ble_client on_connect handler syncs it to the heat pump.
   - platform: homeassistant
     id: desired_target_temp
-    entity_id: input_number.pool_target_temperature
+    entity_id: ${home_assistant_desired_target_temp_number_name}
     on_value:
       then:
         # Only write if BLE is up, both sensors have state, and the
-        # helper differs from the heater's current value. The has_state
+        # helper differs from the heat pump's current value. The has_state
         # checks prevent firing during the initial sync at boot before
-        # we've received the heater's current target.
+        # we've received the heat pump's current target.
         - if:
             condition:
               lambda: |-
@@ -379,17 +401,17 @@ sensor:
             then:
               - logger.log:
                   level: INFO
-                  format: "Helper changed to %.1f — writing to heater"
+                  format: "Helper changed to %.1f — writing to heat pump"
                   args: ['id(desired_target_temp).state']
               - script.execute:
                   id: write_target_temp
                   temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
               - delay: 2s
               # Re-poll to confirm the write took effect
-              - script.execute: poll_heater
+              - script.execute: poll_heat_pump
 
   # ── BLE Notification Parser (internal) ────────────────────────────────────
-  # This sensor subscribes to BLE notifications from the heater and parses
+  # This sensor subscribes to BLE notifications from the heat pump and parses
   # each Modbus reply into the real sensors below. It has no value of its
   # own — returning {} from the lambda means "don't publish".
   #
@@ -398,7 +420,7 @@ sensor:
     type: characteristic
     ble_client_id: heatpump_ble
     id: notify_handler
-    name: "Heater Raw Notify"
+    name: "Heat Pump Raw Notify"
     service_uuid: ${service_uuid}
     characteristic_uuid: ${notify_char_uuid}
     notify: true
@@ -444,13 +466,13 @@ sensor:
       } else if (block == 0x0416) {
         // Setpoints block — reg 0 is the current target temperature × 10.
         id(current_target_temp).publish_state(rd(0) / 10.0);
-        ESP_LOGI("heatpump", "Heater target = %.1f", rd(0) / 10.0);
+        ESP_LOGI("heatpump", "Heat Pump target = %.1f", rd(0) / 10.0);
       } else if (block == 0x03E9) {
         // Block containing register 0x03F3 at offset 10 = power state
         int16_t power = rd(10);
         bool is_on = (power != 0);
-        id(current_heater_power).publish_state(is_on);
-        ESP_LOGI("heatpump", "Heater power = %s", is_on ? "ON" : "OFF");
+        id(current_power_state).publish_state(is_on);
+        ESP_LOGI("heatpump", "Heat Pump power = %s", is_on ? "ON" : "OFF");
       } else if (block == 0x07D1) {
         // Block containing output states at offset 18 (register 0x07E3).
         // Bitmask:
@@ -463,7 +485,14 @@ sensor:
         id(output_circulate_pump).publish_state((outputs & 0x02) != 0);
         id(output_high_fan).publish_state((outputs & 0x04) != 0);
         id(output_4way_valve).publish_state((outputs & 0x08) != 0);
-        ESP_LOGI("heatpump", "Outputs = 0x%04X", outputs);
+
+        // Error code at offset 33 (register 0x07F2).
+        // 0 = no error; 4 = E03 (water flow) confirmed via BLE capture, but see comment below on
+        // error_code and error_description sensor for more details on the raw code and display mapping.
+        int16_t err = rd(33);
+        id(error_code).publish_state(err);
+
+        ESP_LOGI("heatpump", "Outputs = 0x%04X, Error = 0x%04X", outputs, err);
       }
       return {};
 
@@ -518,11 +547,11 @@ sensor:
     filters:
       - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
 
-  # ── Current Heater Target (read-only) ─────────────────────────────────────
-  # Reflects what the heater itself currently thinks the target is, as
+  # ── Current Heat Pump Target (read-only) ─────────────────────────────────────
+  # Reflects what the heat pump itself currently thinks the target is, as
   # reported via BLE. May briefly differ from `desired_target_temp` while
   # a sync is in flight, or persistently if someone changes the target on
-  # the heater's physical control panel (the HA helper takes priority and
+  # the heat pump's physical control panel (the HA helper takes priority and
   # will overwrite on the next sync).
   - platform: template
     id: current_target_temp
@@ -533,6 +562,28 @@ sensor:
     accuracy_decimals: 1
     filters:
       - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
+
+  # ─── Heat Pump Error Code (raw value) ─────────────────────────────────────────
+  # Reads register 0x07F2 from the heat pump. 0 = no error, non-zero = fault.
+  # The display shows error codes like E03 which appear to map to internal
+  # values with an off-by-one offset (E03 = value 4) OR a bitmask (E03 = Bit 2 aka 0x04).
+  # I haven't fully decoded the mapping yet, but capturing the raw code here allows 
+  # for future decoding as more faults are encountered.
+  - platform: template
+    id: error_code
+    name: "Error Code"
+    icon: "mdi:alert-circle"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    # Set from the BLE notify parser, never independently polled
+    update_interval: never
+    # When the raw code changes, push a translated description and the
+    # has-error binary state
+    on_value:
+      then:
+        - component.update: error_description
+        - lambda: |-
+            id(has_error).publish_state(id(error_code).state != 0);
 
   # ── Battery Voltage ───────────────────────────────────────────────────────
   # The Firebeetle 2 ESP32-C6 has an onboard 1:1 voltage divider on GPIO0.
@@ -601,13 +652,56 @@ text_sensor:
                now.hour, now.minute, now.second);
       return {buf};
 
+  # ─── Heat Pump Error Description ─────────────────────────────────────────────
+  # Translates the raw error code into the display code (E0n) and a
+  # description. Add new mappings here as you observe other faults.
+  #
+  # Confirmed mappings (from BLE capture analysis):
+  #   value 0 → No error
+  #   value 4 → E03: Water Flow (heat pump shows "E03" on its display)
+  #
+  # Other codes may be added once observed.
+  - platform: template
+    name: "Error Description"
+    id: error_description
+    icon: "mdi:alert-circle-outline"
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(error_code).has_state()) return std::string("Unknown");
+      int code = (int)id(error_code).state;
+      switch (code) {
+        case 0:  return std::string("OK");
+        case 4:  return std::string("E03: No water flow or flow switch failure");
+        // Add more cases here as we discover them (and figure out if it is an offset or a bitmask).
+        // Errors documented in the manual are:
+        //  P01: Water intel temperature sensor failure
+        //  P02: Water outlet temperature sensor failure
+        //  P04: Ambient temperature sensor failure
+        //  P05: Coil temperature sensor failure
+        //  P81: Exhaust temperature sensor failure
+        //  P82: Exhaust temperature protection
+        //  E01: High pressure protection
+        //  E02: Low pressure protection
+        //  E03: No water flow or flow switch failure
+        //  E06: Temperature is too different between inlet and outlet
+        //  E08: Communication failure
+        //  TP: Low ambient temperature protection
+        //  DF: Defresting
+        default: {
+          char buf[64];
+          snprintf(buf, sizeof(buf), "Unknown error (raw=%d)", code);
+          return std::string(buf);
+        }
+      }
+
 # ─── Scripts ────────────────────────────────────────────────────────────────
 script:
-  # Send the Modbus "read all status" command to the heater.
-  # The heater replies with 4 fragmented notifications covering blocks
+  # Send the Modbus "read all status" command to the heat pump.
+  # The heat pump replies with 4 fragmented notifications covering blocks
   # 0x03E9, 0x0416, 0x07D1, 0x07FE — the BLE notify parser above picks
   # them apart and publishes to the real sensors.
-  - id: poll_heater
+  - id: poll_heat_pump
     then:
       - ble_client.ble_write:
           id: heatpump_ble
@@ -626,7 +720,7 @@ script:
           service_uuid: ${service_uuid}
           characteristic_uuid: ${write_char_uuid}
           value: !lambda |-
-            // Clamp to the heater's accepted range
+            // Clamp to the heat pump's accepted range
             if (temp_x10 < 150) temp_x10 = 150;
             if (temp_x10 > 400) temp_x10 = 400;
 
@@ -654,7 +748,7 @@ script:
   # Captured commands:
   #   OFF: 63 10 03 F3 00 01 02 00 00 30 F1
   #   ON:  63 10 03 F3 00 01 02 00 01 F1 31
-  - id: write_heater_power
+  - id: write_power_state
     parameters:
       power_on: bool
     then:
@@ -687,4 +781,4 @@ script:
 interval:
   - interval: 30s
     then:
-      - script.execute: poll_heater
+      - script.execute: poll_heat_pump
