@@ -687,7 +687,7 @@ text_sensor:
         //  E06: Temperature is too different between inlet and outlet
         //  E08: Communication failure
         //  TP: Low ambient temperature protection
-        //  DF: Defresting
+        //  DF: Defrosting
         default: {
           char buf[64];
           snprintf(buf, sizeof(buf), "Unknown error (raw=%d)", code);
