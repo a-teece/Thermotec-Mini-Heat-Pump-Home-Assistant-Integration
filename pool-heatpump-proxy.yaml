@@ -158,6 +158,7 @@ ble_client:
         - lambda: 'id(ble_connected) = true;'
         # Wait briefly for service discovery to complete, then poll.
         - delay: 3s
+        # Poll the heater to populate current_target_temp, current_heater_power, etc.
         - script.execute: poll_heater
         # Wait for the 4 fragmented notifications to populate
         # current_target_temp and the heater temperatures.
@@ -186,6 +187,28 @@ ble_client:
               - script.execute:
                   id: write_target_temp
                   temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
+
+        # ── Reconcile power state: HA helper is the source of truth ──
+        # Runs on every BLE (re)connect, so handles:
+        #   - First connection on each wake from deep sleep
+        #   - Reconnects after a brief BLE drop while awake
+        #   - Catching up if the helper changed while BLE was down
+        - if:
+            condition:
+              lambda: |-
+                if (!id(desired_heater_power).has_state()) return false;
+                if (!id(current_heater_power).has_state()) return false;
+                return id(desired_heater_power).state != id(current_heater_power).state;
+            then:
+              - logger.log:
+                  level: INFO
+                  format: "Syncing power: HA=%s, heater=%s"
+                  args: ['id(desired_heater_power).state ? "ON" : "OFF"',
+                         'id(current_heater_power).state ? "ON" : "OFF"']
+              - script.execute:
+                  id: write_heater_power
+                  power_on: !lambda 'return id(desired_heater_power).state;'
+
     on_disconnect:
       then:
         - logger.log: "Heat pump disconnected"
@@ -226,6 +249,91 @@ binary_sensor:
                   level: INFO
                   format: "Prevent deep sleep enabled — staying awake"
               - deep_sleep.prevent: deep_sleep_1
+
+  # ─── Desired Heater Power (mirror of HA helper) ───────────────────────────
+  # Mirrors input_boolean.pool_heater_power. Like the target temp helper, the
+  # value lives in HA so it can be changed while the device is asleep — the
+  # new state is read on the next wake and applied via the on_connect handler.
+  #
+  # Create in HA:
+  #   Settings → Devices & Services → Helpers → Create → Toggle helper
+  #   Name: "Pool Heater Power"
+  #   Entity ID (must match `entity_id` below):
+  #     input_boolean.pool_heater_power
+  - platform: homeassistant
+    id: desired_heater_power
+    entity_id: input_boolean.pool_heater_power
+    on_state:
+      then:
+        # Apply immediately if the heater is reachable and the value differs.
+        # Otherwise the on_connect handler will catch it on the next wake.
+        - if:
+            condition:
+              lambda: |-
+                if (!id(current_heater_power).has_state()) return false;
+                if (!id(ble_connected)) return false;
+                return id(desired_heater_power).state != id(current_heater_power).state;
+            then:
+              - logger.log:
+                  level: INFO
+                  format: "Helper changed power to %s — writing to heater"
+                  args: ['id(desired_heater_power).state ? "ON" : "OFF"']
+              - script.execute:
+                  id: write_heater_power
+                  power_on: !lambda 'return id(desired_heater_power).state;'
+              - delay: 2s
+              - script.execute: poll_heater
+
+  # ─── Current Heater Power (read from BLE notify) ──────────────────────────
+  # Reflects the heater's actual power state as reported via BLE. May briefly
+  # differ from desired_heater_power while a sync is in flight, or
+  # persistently if someone uses the heater's physical control panel
+  # (HA helper takes priority on the next sync).
+  - platform: template
+    id: current_heater_power
+    name: "Heater Power State"
+    icon: "mdi:power"
+    device_class: power
+
+  # ─── Diagnostic outputs ───────────────────────────────────────────────────
+  # Decoded from the bitmask at register 0x07E3 in the notify response.
+  # entity_category: diagnostic makes them appear under the device's
+  # Diagnostic section rather than as main controls.
+  - platform: template
+    id: output_compressor
+    name: "Compressor"
+    icon: "mdi:engine"
+    device_class: running
+    entity_category: diagnostic
+    filters:
+      - delayed_on_off: 1s    # debounce: only publish if state holds for 1 second to remove the duplicate BLE responses
+
+  - platform: template
+    id: output_circulate_pump
+    name: "Circulate Pump"
+    icon: "mdi:pump"
+    device_class: running
+    entity_category: diagnostic
+    filters:
+      - delayed_on_off: 1s    # debounce: only publish if state holds for 1 second to remove the duplicate BLE responses
+
+  - platform: template
+    id: output_high_fan
+    name: "High Fan"
+    icon: "mdi:fan"
+    device_class: running
+    entity_category: diagnostic
+    filters:
+      - delayed_on_off: 1s    # debounce: only publish if state holds for 1 second to remove the duplicate BLE responses
+
+  - platform: template
+    id: output_4way_valve
+    name: "4-Way Valve"
+    icon: "mdi:valve"
+    device_class: opening
+    entity_category: diagnostic
+    filters:
+      - delayed_on_off: 1s    # debounce: only publish if state holds for 1 second to remove the duplicate BLE responses
 
   # ── BLE link status ───────────────────────────────────────────────────────
   - platform: template
@@ -337,6 +445,25 @@ sensor:
         // Setpoints block — reg 0 is the current target temperature × 10.
         id(current_target_temp).publish_state(rd(0) / 10.0);
         ESP_LOGI("heatpump", "Heater target = %.1f", rd(0) / 10.0);
+      } else if (block == 0x03E9) {
+        // Block containing register 0x03F3 at offset 10 = power state
+        int16_t power = rd(10);
+        bool is_on = (power != 0);
+        id(current_heater_power).publish_state(is_on);
+        ESP_LOGI("heatpump", "Heater power = %s", is_on ? "ON" : "OFF");
+      } else if (block == 0x07D1) {
+        // Block containing output states at offset 18 (register 0x07E3).
+        // Bitmask:
+        //   bit 0 (0x01) = compressor  (confirmed via capture)
+        //   bit 1 (0x02) = circulate pump  (inferred from app O01-O04 order)
+        //   bit 2 (0x04) = high fan  (confirmed via capture)
+        //   bit 3 (0x08) = 4-way valve  (inferred from app O01-O04 order)
+        int16_t outputs = rd(18);
+        id(output_compressor).publish_state((outputs & 0x01) != 0);
+        id(output_circulate_pump).publish_state((outputs & 0x02) != 0);
+        id(output_high_fan).publish_state((outputs & 0x04) != 0);
+        id(output_4way_valve).publish_state((outputs & 0x08) != 0);
+        ESP_LOGI("heatpump", "Outputs = 0x%04X", outputs);
       }
       return {};
 
@@ -348,6 +475,9 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
+
   - platform: template
     id: outlet_temp
     name: "Outlet Water Temperature"
@@ -355,6 +485,9 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
+
   - platform: template
     id: coil_temp
     name: "Coil Temperature"
@@ -362,6 +495,9 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
+
   - platform: template
     id: ambient_temp
     name: "Ambient Temperature"
@@ -369,6 +505,9 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
+
   - platform: template
     id: exhaust_temp
     name: "Exhaust Temperature"
@@ -376,6 +515,8 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
 
   # ── Current Heater Target (read-only) ─────────────────────────────────────
   # Reflects what the heater itself currently thinks the target is, as
@@ -390,6 +531,8 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
 
   # ── Battery Voltage ───────────────────────────────────────────────────────
   # The Firebeetle 2 ESP32-C6 has an onboard 1:1 voltage divider on GPIO0.
@@ -505,6 +648,35 @@ script:
             msg.push_back((crc >> 8) & 0xFF);
 
             ESP_LOGI("heatpump", "Set target = %.1f", temp_x10 / 10.0);
+            return msg;
+
+  # Write the power on/off state to register 0x03F3.
+  # Captured commands:
+  #   OFF: 63 10 03 F3 00 01 02 00 00 30 F1
+  #   ON:  63 10 03 F3 00 01 02 00 01 F1 31
+  - id: write_heater_power
+    parameters:
+      power_on: bool
+    then:
+      - ble_client.ble_write:
+          id: heatpump_ble
+          service_uuid: ${service_uuid}
+          characteristic_uuid: ${write_char_uuid}
+          value: !lambda |-
+            uint8_t val = power_on ? 0x01 : 0x00;
+            std::vector<uint8_t> msg = {
+              0x63, 0x10, 0x03, 0xF3, 0x00, 0x01, 0x02, 0x00, val
+            };
+            // CRC16 (Modbus RTU)
+            uint16_t crc = 0xFFFF;
+            for (auto b : msg) {
+              crc ^= b;
+              for (int j = 0; j < 8; j++)
+                crc = (crc & 1) ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
+            }
+            msg.push_back(crc & 0xFF);
+            msg.push_back((crc >> 8) & 0xFF);
+            ESP_LOGI("heatpump", "Set power = %s", power_on ? "ON" : "OFF");
             return msg;
 
 # ─── Periodic Polling (only effective while awake) ──────────────────────────
