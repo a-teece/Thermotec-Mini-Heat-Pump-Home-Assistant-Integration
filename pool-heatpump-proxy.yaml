@@ -1,0 +1,232 @@
+substitutions:
+  device_name: pool-heatpump-proxy
+  friendly_name: Pool Heatpump Proxy
+  heater_mac: "AA:AA:AA:AA:AA:AA"
+  service_uuid: "0000ff01-0000-1000-8000-00805f9b34fb"
+  write_char_uuid: "0000ff03-0000-1000-8000-00805f9b34fb"
+  notify_char_uuid: "0000ff02-0000-1000-8000-00805f9b34fb"
+
+globals:
+  - id: ble_connected
+    type: bool
+    initial_value: 'false'
+    restore_value: false
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: dfrobot_firebeetle2_esp32c6
+  variant: ESP32C6
+  framework:
+    type: esp-idf
+    version: recommended
+
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_key_pool_heatpump_proxy
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# ─── Wifi (including portal fallback) ──────────────────────────────────────────
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: ${device_name}
+    password: !secret ap_fallback_password
+
+captive_portal:
+
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 1100ms
+    window: 1100ms
+    active: true
+
+ble_client:
+  - mac_address: ${heater_mac}
+    id: heatpump_ble
+    auto_connect: true
+    on_connect:
+      then:
+        - logger.log: "Heat pump connected"
+        - lambda: 'id(ble_connected) = true;'
+        - delay: 3s
+        - script.execute: poll_heater
+    on_disconnect:
+      then:
+        - logger.log: "Heat pump disconnected"
+        - lambda: 'id(ble_connected) = false;'
+
+# Subscribe to notifications using a sensor component
+# Use a ble_sensor to enable notifications and parse the data
+sensor:
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: heatpump_ble
+    id: notify_handler
+    name: "Heater Raw Notify"
+    service_uuid: ${service_uuid}
+    characteristic_uuid: ${notify_char_uuid}
+    notify: true
+    internal: true
+    lambda: |-
+      // x is the raw notification bytes
+      if (x.size() < 5 || x[0] != 0x63) return {};
+
+      // Write ACK (8-byte Modbus 0x10 response)
+      if (x[1] == 0x10 && x.size() == 8) {
+        uint16_t ack = (x[2] << 8) | x[3];
+        ESP_LOGI("heatpump", "Write ACK for 0x%04X", ack);
+        return {};
+      }
+
+      // Modbus exception
+      if ((x[1] & 0x80) && x.size() >= 5) {
+        ESP_LOGW("heatpump", "Modbus exception 0x%02X for func 0x%02X",
+                 x[2], x[1] & 0x7F);
+        return {};
+      }
+
+      // Data block (fragmented read response)
+      if (x[1] != 0x10 || x.size() < 9) return {};
+
+      uint16_t block = (x[2] << 8) | x[3];
+      auto rd = [&](size_t i) -> int16_t {
+        size_t p = 7 + i * 2;
+        if (p + 1 >= x.size()) return 0;
+        return (int16_t)((x[p] << 8) | x[p+1]);
+      };
+
+      if (block == 0x07FE) {
+        // reg 0 = T01 suction - usually disconnected (0x7FFD)
+        id(inlet_temp).publish_state(rd(1) / 10.0);
+        id(outlet_temp).publish_state(rd(2) / 10.0);
+        id(coil_temp).publish_state(rd(3) / 10.0);
+        id(ambient_temp).publish_state(rd(4) / 10.0);
+        id(exhaust_temp).publish_state(rd(5) / 10.0);
+        ESP_LOGD("heatpump", "Temps updated");
+      } else if (block == 0x0416) {
+        id(target_temp).publish_state(rd(0) / 10.0);
+        ESP_LOGD("heatpump", "Target = %.1f", rd(0) / 10.0);
+      }
+      return {};
+
+  - platform: template
+    id: inlet_temp
+    name: "Inlet Water Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+  - platform: template
+    id: outlet_temp
+    name: "Outlet Water Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+  - platform: template
+    id: coil_temp
+    name: "Coil Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+  - platform: template
+    id: ambient_temp
+    name: "Ambient Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+  - platform: template
+    id: exhaust_temp
+    name: "Exhaust Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+interval:
+  - interval: 30s
+    then:
+      - script.execute: poll_heater
+
+script:
+  - id: poll_heater
+    then:
+      - ble_client.ble_write:
+          id: heatpump_ble
+          service_uuid: ${service_uuid}
+          characteristic_uuid: ${write_char_uuid}
+          # Modbus: read 45 regs from address 0x0007
+          value: [0x63, 0x03, 0x00, 0x07, 0x00, 0x2D, 0x3C, 0x54]
+
+  - id: write_target_temp
+    parameters:
+      temp_x10: int
+    then:
+      - ble_client.ble_write:
+          id: heatpump_ble
+          service_uuid: ${service_uuid}
+          characteristic_uuid: ${write_char_uuid}
+          value: !lambda |-
+            // Clamp to valid range (15.0 - 40.0°C)
+            if (temp_x10 < 150) temp_x10 = 150;
+            if (temp_x10 > 400) temp_x10 = 400;
+
+            // Build Modbus 0x10 Write Multiple Registers (1 register)
+            std::vector<uint8_t> msg = {
+              0x63, 0x10, 0x04, 0x16, 0x00, 0x01, 0x02,
+              (uint8_t)((temp_x10 >> 8) & 0xFF),
+              (uint8_t)(temp_x10 & 0xFF)
+            };
+
+            uint16_t crc = 0xFFFF;
+            for (auto b : msg) {
+              crc ^= b;
+              for (int j = 0; j < 8; j++)
+                crc = (crc & 1) ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
+            }
+            msg.push_back(crc & 0xFF);
+            msg.push_back((crc >> 8) & 0xFF);
+
+            ESP_LOGI("heatpump", "Set target = %.1f", temp_x10 / 10.0);
+            return msg;
+
+number:
+  - platform: template
+    id: target_temp
+    name: "Target Temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 15.0
+    max_value: 40.0
+    step: 0.5
+    mode: slider
+    optimistic: false
+    set_action:
+      - script.execute:
+          id: write_target_temp
+          temp_x10: !lambda 'return (int)(x * 10);'
+      - delay: 2s
+      - script.execute: poll_heater
+
+binary_sensor:
+  - platform: template
+    id: heater_ble_status
+    name: "Heat Pump BLE Connection"
+    device_class: connectivity
+    lambda: |-
+      return id(ble_connected);
