@@ -720,6 +720,9 @@ sensor:
           id(main_control_software_code).publish_state(code_str);
         }
 
+        // Unit running state at offset 10 (register 0x07DB).
+        // 0 = stopped (may indicate self-shutdown), 1 = running.
+        id(unit_running).publish_state(rd(10) != 0);
 
         // Error code at offset 33 (register 0x07F2).
         // 0 = no error; 4 = E03 (water flow) confirmed via BLE capture, but see comment below on
