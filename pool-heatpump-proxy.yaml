@@ -990,10 +990,29 @@ text_sensor:
                   id: write_mode
                   mode: !lambda 'return id(desired_mode).state;'
 
-
-        # After changing the mode reset the target temperature.
+              # Give the write a moment, then re-poll so current_target_temp
+              # reflects the NEW mode's target register.
               - delay: 2s
               - script.execute: poll_heat_pump
+
+              # Wait for the poll's notifications to arrive, then push the
+              # desired target into the new mode's register if it differs.
+              - delay: 3s
+              - if:
+                  condition:
+                    lambda: |-
+                      if (!id(desired_target_temp).has_state()) return false;
+                      if (!id(current_target_temp).has_state()) return false;
+                      return fabsf(id(desired_target_temp).state -
+                                   id(current_target_temp).state) > 0.05f;
+                  then:
+                    - logger.log:
+                        level: INFO
+                        format: "Mode changed — pushing target %.1f to new mode's register"
+                        args: ['id(desired_target_temp).state']
+                    - script.execute:
+                        id: write_target_temp
+                        temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
 
   # ─── Current Mode (read from BLE notify) ─────────────────────────────────
   # Reflects the heat pump's actual mode as reported via BLE. Updated by the
