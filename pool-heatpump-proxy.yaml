@@ -486,6 +486,33 @@ sensor:
         id(output_high_fan).publish_state((outputs & 0x04) != 0);
         id(output_4way_valve).publish_state((outputs & 0x08) != 0);
 
+        // Firmware identity (block 0x07D1 reg 16 + reg 17).
+        // These are stable across reads — published once per session.
+        // reg 16 (0x07E1) = "Master program version number", DIGI5 (×10)
+        //                   e.g. raw 12 → "1.2"
+        // reg 17 (0x07E2) = "Main control software code", DIGI1 (raw)
+        //                   e.g. 494
+        uint16_t master_ver_raw = rd(16);
+        uint16_t soft_code      = rd(17);
+
+        char ver_buf[16];
+        snprintf(ver_buf, sizeof(ver_buf), "%u.%u",
+                 master_ver_raw / 10, master_ver_raw % 10);
+        std::string ver_str(ver_buf);
+        if (!id(master_program_version).has_state() ||
+            id(master_program_version).state != ver_str) {
+          id(master_program_version).publish_state(ver_str);
+        }
+
+        char code_buf[16];
+        snprintf(code_buf, sizeof(code_buf), "%u", soft_code);
+        std::string code_str(code_buf);
+        if (!id(main_control_software_code).has_state() ||
+            id(main_control_software_code).state != code_str) {
+          id(main_control_software_code).publish_state(code_str);
+        }
+
+
         // Error code at offset 33 (register 0x07F2).
         // 0 = no error; 4 = E03 (water flow) confirmed via BLE capture, but see comment below on
         // error_code and error_description sensor for more details on the raw code and display mapping.
@@ -694,6 +721,24 @@ text_sensor:
           return std::string(buf);
         }
       }
+
+  # ─── Master Program Version (register 0x07E1) ─────────────────────────────
+  # Displayed on the heat pump's control panel as "Master program version
+  # number". A DIGI5 value (scaled ×10), so raw 12 = "1.2".
+  - platform: template
+    name: "Master Program Version"
+    id: master_program_version
+    icon: "mdi:chip"
+    entity_category: diagnostic
+
+  # ─── Main Control Software Code (register 0x07E2) ─────────────────────────
+  # Displayed on the heat pump's control panel as "Main control software
+  # code". A DIGI1 value (raw integer build code), e.g. 494.
+  - platform: template
+    name: "Main Control Software Code"
+    id: main_control_software_code
+    icon: "mdi:chip"
+    entity_category: diagnostic
 
 # ─── Scripts ────────────────────────────────────────────────────────────────
 script:
