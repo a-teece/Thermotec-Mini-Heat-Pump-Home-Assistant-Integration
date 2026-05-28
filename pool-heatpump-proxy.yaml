@@ -42,6 +42,12 @@ substitutions:
   #  Display: Slider
   home_assistant_desired_target_temp_number_name: input_number.pool_target_temperature
 
+  #  Type: Dropdown (aka input_select)
+  #  Name: Pool Heater Mode
+  #  Entity ID: input_select.pool_heater_mode
+  #  Options: Heat, Cool, Auto
+  home_assistant_desired_mode_select_name: input_select.pool_heater_mode
+
 # ─── Globals ────────────────────────────────────────────────────────────────
 globals:
   # Tracks whether the BLE link to the heat pump is up.
@@ -199,11 +205,15 @@ ble_client:
         # Wait for the 4 fragmented notifications to populate
         # current_target_temp and the heat pump temperatures.
         - delay: 5s
-        # ── Reconcile target temp: HA helper is the source of truth ──
+        
+        # ── Reconcile HA helpers ──
         # Runs on every BLE (re)connect, so handles:
         #   - First connection on each wake from deep sleep
         #   - Reconnects after a brief BLE drop while awake
         #   - Catching up if the helper changed while BLE was down
+
+
+        # ── Target temp ──
         - if:
             condition:
               lambda: |-
@@ -224,11 +234,24 @@ ble_client:
                   id: write_target_temp
                   temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
 
-        # ── Reconcile power state: HA helper is the source of truth ──
-        # Runs on every BLE (re)connect, so handles:
-        #   - First connection on each wake from deep sleep
-        #   - Reconnects after a brief BLE drop while awake
-        #   - Catching up if the helper changed while BLE was down
+        # ── Mode ──
+        - if:
+            condition:
+              lambda: |-
+                if (!id(desired_mode).has_state()) return false;
+                if (!id(current_mode).has_state()) return false;
+                return id(desired_mode).state != id(current_mode).state;
+            then:
+              - logger.log:
+                  level: INFO
+                  format: "Syncing mode: HA=%s, heat pump=%s"
+                  args: ['id(desired_mode).state.c_str()',
+                         'id(current_mode).state.c_str()']
+              - script.execute:
+                  id: write_mode
+                  mode: !lambda 'return id(desired_mode).state;'
+
+        # ──  Power State ──
         - if:
             condition:
               lambda: |-
@@ -464,8 +487,31 @@ sensor:
         id(exhaust_temp).publish_state(rd(5) / 10.0);
         ESP_LOGI("heatpump", "Temps updated");
       } else if (block == 0x0416) {
-        // Setpoints block — reg 0 is the current target temperature × 10.
-        id(current_target_temp).publish_state(rd(0) / 10.0);
+        // Each mode has its own target register in this block:
+        //   reg 0  (0x0416) = R01 Heating set
+        //   reg 5  (0x041B) = R06 Cooling set
+        //   reg 22 (0x042C) = R11 Auto set
+        // The heat pump's display shows whichever matches the current mode,
+        // so we mirror that here.
+        std::string mode_str = id(current_mode).has_state()
+                               ? id(current_mode).state
+                               : std::string("Heat");
+        float displayed_target;
+        if (mode_str == "Cool")      displayed_target = rd(5)  / 10.0;
+        else if (mode_str == "Auto") displayed_target = rd(22) / 10.0;
+        else                         displayed_target = rd(0)  / 10.0;
+        id(current_target_temp).publish_state(displayed_target);
+        ESP_LOGI("heatpump", "Target (%s mode) = %.1f",
+                 mode_str.c_str(), displayed_target);
+
+        // Diagnostic sensors — always publish all three set-points
+        id(heating_set_temp).publish_state(rd(0) / 10.0);
+        id(cooling_set_temp).publish_state(rd(5) / 10.0);
+        id(auto_set_temp).publish_state(rd(22) / 10.0);
+        id(min_heat_temp).publish_state(rd(3) / 10.0);
+        id(max_heat_temp).publish_state(rd(4) / 10.0);
+        id(min_cool_temp).publish_state(rd(8) / 10.0);
+        id(max_cool_temp).publish_state(rd(9) / 10.0);
 
         // D06 Defrost type at reg 15 (0x0425): 0=Normal, 1=Eco
         int16_t dt = rd(15);
@@ -475,11 +521,23 @@ sensor:
           std::string("Unknown"));
 
         ESP_LOGI("heatpump", "Heat Pump target = %.1f", rd(0) / 10.0);
-      } else if (block == 0x03E9) {
+} else if (block == 0x03E9) {
         // Block containing register 0x03F3 at offset 10 = power state
         int16_t power = rd(10);
         bool is_on = (power != 0);
         id(current_power_state).publish_state(is_on);
+
+        // Mode at offset 11 (register 0x03F4)
+        // 0 = Heat, 1 = Cool, 2 = Auto
+        int16_t mode = rd(11);
+        const char *mode_str;
+        switch (mode) {
+          case 0:  mode_str = "Heat"; break;
+          case 1:  mode_str = "Cool"; break;
+          case 2:  mode_str = "Auto"; break;
+          default: mode_str = "Unknown"; break;
+        }
+        id(current_mode).publish_state(std::string(mode_str));
 
         // H06 Mode type at reg 22 (0x03FF): 1=Heat pump, 2=Heat only (4-way valve)
         int16_t mt = rd(22);
@@ -496,7 +554,7 @@ sensor:
           pm == 2 ? std::string("Interval") :
           std::string("Unknown"));
 
-        ESP_LOGI("heatpump", "Heat Pump power = %s", is_on ? "ON" : "OFF");
+        ESP_LOGI("heatpump", "Heat Pump power=%s mode=%s", is_on ? "ON" : "OFF", mode_str);
 
       } else if (block == 0x07D1) {
         // Block containing output states at offset 18 (register 0x07E3).
@@ -704,6 +762,44 @@ text_sensor:
                now.hour, now.minute, now.second);
       return {buf};
 
+# ─── Desired Mode (mirror of HA helper) ──────────────────────────────────
+  # Mirrors the input_select helper. Like the other mirrored helpers, the
+  # value lives in HA so it can be changed while the device is asleep — the
+  # new state is read on the next wake and applied via on_connect.
+  #
+  # Expected values: "Heat", "Cool", "Auto"
+  - platform: homeassistant
+    id: desired_mode
+    entity_id: ${home_assistant_desired_mode_select_name}
+    on_value:
+      then:
+        # Apply immediately if heat pump is reachable and value differs.
+        # Otherwise on_connect handler will catch it on the next wake.
+        - if:
+            condition:
+              lambda: |-
+                if (!id(current_mode).has_state()) return false;
+                if (!id(ble_connected)) return false;
+                return id(desired_mode).state != id(current_mode).state;
+            then:
+              - logger.log:
+                  level: INFO
+                  format: "Helper changed mode to %s — writing to heat pump"
+                  args: ['id(desired_mode).state.c_str()']
+              - script.execute:
+                  id: write_mode
+                  mode: !lambda 'return id(desired_mode).state;'
+              - delay: 2s
+              - script.execute: poll_heat_pump
+
+  # ─── Current Mode (read from BLE notify) ─────────────────────────────────
+  # Reflects the heat pump's actual mode as reported via BLE. Updated by the
+  # notify parser when block 0x03E9 arrives — register 0x03F4 at offset 11.
+  - platform: template
+    id: current_mode
+    name: "Current Mode"
+    icon: "mdi:thermostat"
+
   # ─── Heat Pump Error Description ─────────────────────────────────────────────
   # Translates the raw error code into the display code (E0n) and a
   # description. Add new mappings here as you observe other faults.
@@ -802,8 +898,15 @@ script:
           characteristic_uuid: ${write_char_uuid}
           value: [0x63, 0x03, 0x00, 0x07, 0x00, 0x2D, 0x3C, 0x54]
 
-  # Write a new target temperature (passed as °C × 10, e.g. 305 = 30.5°C).
-  # Modbus 0x10 Write Multiple Registers, 1 register at address 0x0416.
+  # Write a new target temperature to the register appropriate to the
+  # current operating mode:
+  #   Heat → 0x0416 (R01 Heating set)
+  #   Cool → 0x041B (R06 Cooling set)
+  #   Auto → 0x042C (R11 Auto set)
+  #
+  # If the current mode isn't known yet (e.g. first connect after wake
+  # before the heat pump has been polled), default to heat target — that's
+  # the most common case and matches the previous behaviour.
   - id: write_target_temp
     parameters:
       temp_x10: int
@@ -814,17 +917,32 @@ script:
           characteristic_uuid: ${write_char_uuid}
           value: !lambda |-
             // Clamp to the heat pump's accepted range
-            if (temp_x10 < 150) temp_x10 = 150;
-            if (temp_x10 > 400) temp_x10 = 400;
+            // This is hard-coded, but could read from the diagnosic sensors that output the configured range.
+            if (mode_str == "Cool") {
+              if (temp_x10 < 100) temp_x10 = 100;   // R09 Min cool = 10°C
+              if (temp_x10 > 350) temp_x10 = 350;   // R10 Max cool = 35°C
+            } else {
+              // Heat & Auto both use heat range
+              if (temp_x10 < 150) temp_x10 = 150;   // R04 Min heat = 15°C
+              if (temp_x10 > 400) temp_x10 = 400;   // R05 Max heat = 40°C
+            }
 
-            // Build the Modbus frame
+            // Pick the right register based on current mode
+            uint8_t addr_hi = 0x04, addr_lo = 0x16;  // default: heat
+            std::string mode_str = id(current_mode).has_state()
+                                   ? id(current_mode).state
+                                   : std::string("Heat");
+            if (mode_str == "Cool") {
+              addr_hi = 0x04; addr_lo = 0x1B;
+            } else if (mode_str == "Auto") {
+              addr_hi = 0x04; addr_lo = 0x2C;
+            }
+
             std::vector<uint8_t> msg = {
-              0x63, 0x10, 0x04, 0x16, 0x00, 0x01, 0x02,
+              0x63, 0x10, addr_hi, addr_lo, 0x00, 0x01, 0x02,
               (uint8_t)((temp_x10 >> 8) & 0xFF),
               (uint8_t)(temp_x10 & 0xFF)
             };
-
-            // CRC16: polynomial 0xA001, init 0xFFFF, low byte first
             uint16_t crc = 0xFFFF;
             for (auto b : msg) {
               crc ^= b;
@@ -834,7 +952,8 @@ script:
             msg.push_back(crc & 0xFF);
             msg.push_back((crc >> 8) & 0xFF);
 
-            ESP_LOGI("heatpump", "Set target = %.1f", temp_x10 / 10.0);
+            ESP_LOGI("heatpump", "Set %s target = %.1f (reg 0x%02X%02X)",
+                     mode_str.c_str(), temp_x10 / 10.0, addr_hi, addr_lo);
             return msg;
 
   # Write the power on/off state to register 0x03F3.
@@ -864,6 +983,54 @@ script:
             msg.push_back(crc & 0xFF);
             msg.push_back((crc >> 8) & 0xFF);
             ESP_LOGI("heatpump", "Set power = %s", power_on ? "ON" : "OFF");
+            return msg;
+
+  # Write the operating mode to register 0x03F4 (and 0x03F5).
+  # The app writes 2 consecutive registers — we replicate that exactly to
+  # match observed behaviour. Register 0x03F5's purpose isn't fully
+  # understood but appears mode-dependent.
+  #
+  # Captured commands (CRCs verified):
+  #   HEAT: 63 10 03 F4 00 02 04 00 00 00 00 1C 51
+  #   COOL: 63 10 03 F4 00 02 04 00 01 00 88 4D F7
+  #   AUTO: 63 10 03 F4 00 02 04 00 02 00 8C BC 34
+  - id: write_mode
+    parameters:
+      mode: string
+    then:
+      - ble_client.ble_write:
+          id: heatpump_ble
+          service_uuid: ${service_uuid}
+          characteristic_uuid: ${write_char_uuid}
+          value: !lambda |-
+            // Translate string mode to (mode_val, second_reg) pair.
+            // The second register's exact meaning is unknown but the values
+            // below match what the official AquaTemp app sends.
+            uint8_t mode_lo, sec_hi, sec_lo;
+            if (mode == "Cool") {
+              mode_lo = 0x01; sec_hi = 0x00; sec_lo = 0x88;
+            } else if (mode == "Auto") {
+              mode_lo = 0x02; sec_hi = 0x00; sec_lo = 0x8C;
+            } else {
+              // Default to Heat (mode 0) — also covers any unrecognised string
+              mode_lo = 0x00; sec_hi = 0x00; sec_lo = 0x00;
+            }
+
+            std::vector<uint8_t> msg = {
+              0x63, 0x10, 0x03, 0xF4, 0x00, 0x02, 0x04,
+              0x00, mode_lo,
+              sec_hi, sec_lo
+            };
+            // CRC16 (Modbus RTU)
+            uint16_t crc = 0xFFFF;
+            for (auto b : msg) {
+              crc ^= b;
+              for (int j = 0; j < 8; j++)
+                crc = (crc & 1) ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
+            }
+            msg.push_back(crc & 0xFF);
+            msg.push_back((crc >> 8) & 0xFF);
+            ESP_LOGI("heatpump", "Set mode = %s", mode.c_str());
             return msg;
 
 # ─── Periodic Polling (only effective while awake) ──────────────────────────
