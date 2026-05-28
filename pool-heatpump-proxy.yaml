@@ -646,7 +646,7 @@ sensor:
           std::string("Unknown"));
 
         ESP_LOGI("heatpump", "Heat Pump target = %.1f", rd(0) / 10.0);
-} else if (block == 0x03E9) {
+      } else if (block == 0x03E9) {
         // Block containing register 0x03F3 at offset 10 = power state
         int16_t power = rd(10);
         bool is_on = (power != 0);
@@ -962,7 +962,7 @@ text_sensor:
                now.hour, now.minute, now.second);
       return {buf};
 
-# ─── Desired Mode (mirror of HA helper) ──────────────────────────────────
+  # ─── Desired Mode (mirror of HA helper) ──────────────────────────────────
   # Mirrors the input_select helper. Like the other mirrored helpers, the
   # value lives in HA so it can be changed while the device is asleep — the
   # new state is read on the next wake and applied via on_connect.
