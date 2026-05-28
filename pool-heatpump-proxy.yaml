@@ -805,7 +805,13 @@ sensor:
       then:
         - component.update: error_description
         - lambda: |-
-            id(has_error).publish_state(id(error_code).state != 0);
+            bool err = (id(error_code).state != 0) ||
+                       id(inlet_temp_fault).state ||
+                       id(outlet_temp_fault).state ||
+                       id(ambient_temp_fault).state ||
+                       id(coil_temp_fault).state ||
+                       id(exhaust_temp_fault).state;
+            id(has_error).publish_state(err);
 
   # ─── R-tab setpoint diagnostics ────────────────────────────────────────────
   - platform: template
