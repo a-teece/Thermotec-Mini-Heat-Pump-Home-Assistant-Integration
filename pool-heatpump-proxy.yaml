@@ -695,6 +695,72 @@ sensor:
         - lambda: |-
             id(has_error).publish_state(id(error_code).state != 0);
 
+  # ─── R-tab setpoint diagnostics ────────────────────────────────────────────
+  - platform: template
+    id: heating_set_temp
+    name: "Heating Set Temp (R01)"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    filters:
+      - delta: 0.05
+
+  - platform: template
+    id: cooling_set_temp
+    name: "Cooling Set Temp (R06)"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    filters:
+      - delta: 0.05
+
+  - platform: template
+    id: auto_set_temp
+    name: "Auto Set Temp (R11)"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    filters:
+      - delta: 0.05
+
+  - platform: template
+    id: min_heat_temp
+    name: "Min Heat Limit (R04)"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 1
+    entity_category: diagnostic
+
+  - platform: template
+    id: max_heat_temp
+    name: "Max Heat Limit (R05)"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 1
+    entity_category: diagnostic
+
+  - platform: template
+    id: min_cool_temp
+    name: "Min Cool Limit (R09)"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 1
+    entity_category: diagnostic
+
+  - platform: template
+    id: max_cool_temp
+    name: "Max Cool Limit (R10)"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 1
+    entity_category: diagnostic
+
   # ── Battery Voltage ───────────────────────────────────────────────────────
   # The Firebeetle 2 ESP32-C6 has an onboard 1:1 voltage divider on GPIO0.
   # 12dB attenuation gives the ADC a ~3.1V max range; the multiply: 2.0
@@ -919,8 +985,18 @@ script:
           service_uuid: ${service_uuid}
           characteristic_uuid: ${write_char_uuid}
           value: !lambda |-
-            // Clamp to the heat pump's accepted range
-            // This is hard-coded, but could read from the diagnosic sensors that output the configured range.
+            // Pick the right register based on current mode
+            std::string mode_str = id(current_mode).has_state()
+                                   ? id(current_mode).state
+                                   : std::string("Heat");
+            uint8_t addr_hi = 0x04, addr_lo = 0x16;  // default: heat
+            if (mode_str == "Cool") {
+              addr_hi = 0x04; addr_lo = 0x1B;
+            } else if (mode_str == "Auto") {
+              addr_hi = 0x04; addr_lo = 0x2C;
+            }
+
+            // Clamp to the mode-appropriate range
             if (mode_str == "Cool") {
               if (temp_x10 < 100) temp_x10 = 100;   // R09 Min cool = 10°C
               if (temp_x10 > 350) temp_x10 = 350;   // R10 Max cool = 35°C
@@ -928,17 +1004,6 @@ script:
               // Heat & Auto both use heat range
               if (temp_x10 < 150) temp_x10 = 150;   // R04 Min heat = 15°C
               if (temp_x10 > 400) temp_x10 = 400;   // R05 Max heat = 40°C
-            }
-
-            // Pick the right register based on current mode
-            uint8_t addr_hi = 0x04, addr_lo = 0x16;  // default: heat
-            std::string mode_str = id(current_mode).has_state()
-                                   ? id(current_mode).state
-                                   : std::string("Heat");
-            if (mode_str == "Cool") {
-              addr_hi = 0x04; addr_lo = 0x1B;
-            } else if (mode_str == "Auto") {
-              addr_hi = 0x04; addr_lo = 0x2C;
             }
 
             std::vector<uint8_t> msg = {
@@ -954,7 +1019,6 @@ script:
             }
             msg.push_back(crc & 0xFF);
             msg.push_back((crc >> 8) & 0xFF);
-
             ESP_LOGI("heatpump", "Set %s target = %.1f (reg 0x%02X%02X)",
                      mode_str.c_str(), temp_x10 / 10.0, addr_hi, addr_lo);
             return msg;
