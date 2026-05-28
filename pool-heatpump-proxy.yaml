@@ -485,6 +485,19 @@ binary_sensor:
                        id(exhaust_temp_fault).state;
             id(has_error).publish_state(err);
 
+  # ─── Unit Running State ───────────────────────────────────────────────────
+  # Reflects the heat pump's internal "I'm running" state (register 0x07DB).
+  # Differs from the power state (0x03F3):
+  #   - power state = user's on/off command
+  #   - unit state  = "actually running" (may be 0 even when powered on if
+  #                   the heat pump has safety-stopped due to a fault).
+  - platform: template
+    id: unit_running
+    name: "Unit Running"
+    icon: "mdi:engine"
+    device_class: running
+    entity_category: diagnostic
+
 # ─── Sensors ────────────────────────────────────────────────────────────────
 sensor:
   # ── Desired Target Temperature (HA helper mirror) ─────────────────────────
