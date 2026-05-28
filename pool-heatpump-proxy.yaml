@@ -466,13 +466,38 @@ sensor:
       } else if (block == 0x0416) {
         // Setpoints block — reg 0 is the current target temperature × 10.
         id(current_target_temp).publish_state(rd(0) / 10.0);
+
+        // D06 Defrost type at reg 15 (0x0425): 0=Normal, 1=Eco
+        int16_t dt = rd(15);
+        id(defrost_type).publish_state(
+          dt == 0 ? std::string("Normal") :
+          dt == 1 ? std::string("Eco") :
+          std::string("Unknown"));
+
         ESP_LOGI("heatpump", "Heat Pump target = %.1f", rd(0) / 10.0);
       } else if (block == 0x03E9) {
         // Block containing register 0x03F3 at offset 10 = power state
         int16_t power = rd(10);
         bool is_on = (power != 0);
         id(current_power_state).publish_state(is_on);
+
+        // H06 Mode type at reg 22 (0x03FF): 1=Heat pump, 2=Heat only (4-way valve)
+        int16_t mt = rd(22);
+        id(heater_mode_type).publish_state(
+          mt == 1 ? std::string("Heat pump") :
+          mt == 2 ? std::string("Heat only (4-way valve)") :
+          std::string("Unknown"));
+
+        // P01 Circulating pump mode at reg 36 (0x040D): 0=Normal, 1=Stop, 2=Interval
+        int16_t pm = rd(36);
+        id(pump_mode).publish_state(
+          pm == 0 ? std::string("Normal") :
+          pm == 1 ? std::string("Stop") :
+          pm == 2 ? std::string("Interval") :
+          std::string("Unknown"));
+
         ESP_LOGI("heatpump", "Heat Pump power = %s", is_on ? "ON" : "OFF");
+
       } else if (block == 0x07D1) {
         // Block containing output states at offset 18 (register 0x07E3).
         // Bitmask:
@@ -721,6 +746,29 @@ text_sensor:
           return std::string(buf);
         }
       }
+
+  # ─── Advanced settings (read-only diagnostics) ────────────────────────────
+  # Although it is understood how to set these, it may be dangerous to set them
+  # incorrectly so they're implemented as read-only diagnostics for now.
+  # Change them using the AquaTemp app and the password "66" for the
+  # device parameters menu.
+  - platform: template
+    id: defrost_type
+    name: "Defrost Type"
+    icon: "mdi:snowflake-melt"
+    entity_category: diagnostic
+
+  - platform: template
+    id: heater_mode_type
+    name: "Heat Pump Mode Type"
+    icon: "mdi:cog"
+    entity_category: diagnostic
+
+  - platform: template
+    id: pump_mode
+    name: "Circulating Pump Mode"
+    icon: "mdi:pump"
+    entity_category: diagnostic
 
   # ─── Master Program Version (register 0x07E1) ─────────────────────────────
   # Displayed on the heat pump's control panel as "Master program version
