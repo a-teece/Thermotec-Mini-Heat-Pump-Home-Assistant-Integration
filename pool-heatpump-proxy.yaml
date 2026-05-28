@@ -997,32 +997,38 @@ text_sensor:
     entity_category: diagnostic
     update_interval: never
     lambda: |-
-      if (!id(error_code).has_state()) return std::string("Unknown");
-      int code = (int)id(error_code).state;
-      switch (code) {
-        case 0:  return std::string("OK");
-        case 4:  return std::string("E03: No water flow or flow switch failure");
-        // Add more cases here as we discover them (and figure out if it is an offset or a bitmask).
-        // Errors documented in the manual are:
-        //  P01: Water intel temperature sensor failure
-        //  P02: Water outlet temperature sensor failure
-        //  P04: Ambient temperature sensor failure
-        //  P05: Coil temperature sensor failure
-        //  P81: Exhaust temperature sensor failure
-        //  P82: Exhaust temperature protection
-        //  E01: High pressure protection
-        //  E02: Low pressure protection
-        //  E03: No water flow or flow switch failure
-        //  E06: Temperature is too different between inlet and outlet
-        //  E08: Communication failure
-        //  TP: Low ambient temperature protection
-        //  DF: Defrosting
-        default: {
-          char buf[64];
-          snprintf(buf, sizeof(buf), "Unknown error (raw=%d)", code);
-          return std::string(buf);
+      // ── Aggregate all active faults: E-codes from error register +
+      //    P-codes from temperature sensor failures ──
+      std::string result;
+      auto append = [&](const std::string &s) {
+        if (!result.empty()) result += "; ";
+        result += s;
+      };
+
+      // E-codes from error register (bitmask at 0x07F2)
+      if (id(error_code).has_state()) {
+        uint16_t code = (uint16_t)(int)id(error_code).state;
+        // Confirmed/inferred mappings on this model:
+        if (code & 0x0001) append("E01 High pressure protection");  // bit 0 — inferred
+        if (code & 0x0002) append("E02 Low pressure protection");   // bit 1 — confirmed
+        if (code & 0x0004) append("E03 No water flow");              // bit 2 — confirmed
+        uint16_t known = 0x0007;
+        uint16_t unknown = code & ~known;
+        if (unknown) {
+          char buf[40];
+          snprintf(buf, sizeof(buf), "E-unknown bits 0x%04X", unknown);
+          append(buf);
         }
       }
+
+      // P-codes from temperature sensor failures
+      if (id(inlet_temp_fault).state)   append("P01 Inlet sensor");
+      if (id(outlet_temp_fault).state)  append("P02 Outlet sensor");
+      if (id(ambient_temp_fault).state) append("P04 Ambient sensor");
+      if (id(coil_temp_fault).state)    append("P05 Coil sensor");
+      if (id(exhaust_temp_fault).state) append("P81 Exhaust sensor");
+
+      return result.empty() ? std::string("OK") : result;
 
   # ─── Advanced settings (read-only diagnostics) ────────────────────────────
   # Although it is understood how to set these, it may be dangerous to set them
