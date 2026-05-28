@@ -395,6 +395,96 @@ binary_sensor:
     device_class: problem
     entity_category: diagnostic
 
+  # ─── Temperature sensor fault indicators (P-codes) ─────────────────────────
+  # Triggered when temperature register reads heat-pump's "sensor failure"
+  # sentinel value. Matches heat-pump's displayed P-codes:
+  #   P01=Inlet (T02), P02=Outlet (T03), P04=Ambient (T05),
+  #   P05=Coil (T04),  P81=Exhaust (T06)
+  - platform: template
+    id: inlet_temp_fault
+    name: "Inlet Temp Sensor Fault (P01)"
+    device_class: problem
+    entity_category: diagnostic
+    on_state:
+      then:
+        - component.update: error_description
+        - lambda: |-
+            bool err = (id(error_code).has_state() && id(error_code).state != 0) ||
+                       id(inlet_temp_fault).state ||
+                       id(outlet_temp_fault).state ||
+                       id(ambient_temp_fault).state ||
+                       id(coil_temp_fault).state ||
+                       id(exhaust_temp_fault).state;
+            id(has_error).publish_state(err);
+
+  - platform: template
+    id: outlet_temp_fault
+    name: "Outlet Temp Sensor Fault (P02)"
+    device_class: problem
+    entity_category: diagnostic
+    on_state:
+      then:
+        - component.update: error_description
+        - lambda: |-
+            bool err = (id(error_code).has_state() && id(error_code).state != 0) ||
+                       id(inlet_temp_fault).state ||
+                       id(outlet_temp_fault).state ||
+                       id(ambient_temp_fault).state ||
+                       id(coil_temp_fault).state ||
+                       id(exhaust_temp_fault).state;
+            id(has_error).publish_state(err);
+
+  - platform: template
+    id: ambient_temp_fault
+    name: "Ambient Temp Sensor Fault (P04)"
+    device_class: problem
+    entity_category: diagnostic
+    on_state:
+      then:
+        - component.update: error_description
+        - lambda: |-
+            bool err = (id(error_code).has_state() && id(error_code).state != 0) ||
+                       id(inlet_temp_fault).state ||
+                       id(outlet_temp_fault).state ||
+                       id(ambient_temp_fault).state ||
+                       id(coil_temp_fault).state ||
+                       id(exhaust_temp_fault).state;
+            id(has_error).publish_state(err);
+
+  - platform: template
+    id: coil_temp_fault
+    name: "Coil Temp Sensor Fault (P05)"
+    device_class: problem
+    entity_category: diagnostic
+    on_state:
+      then:
+        - component.update: error_description
+        - lambda: |-
+            bool err = (id(error_code).has_state() && id(error_code).state != 0) ||
+                       id(inlet_temp_fault).state ||
+                       id(outlet_temp_fault).state ||
+                       id(ambient_temp_fault).state ||
+                       id(coil_temp_fault).state ||
+                       id(exhaust_temp_fault).state;
+            id(has_error).publish_state(err);
+
+  - platform: template
+    id: exhaust_temp_fault
+    name: "Exhaust Temp Sensor Fault (P81)"
+    device_class: problem
+    entity_category: diagnostic
+    on_state:
+      then:
+        - component.update: error_description
+        - lambda: |-
+            bool err = (id(error_code).has_state() && id(error_code).state != 0) ||
+                       id(inlet_temp_fault).state ||
+                       id(outlet_temp_fault).state ||
+                       id(ambient_temp_fault).state ||
+                       id(coil_temp_fault).state ||
+                       id(exhaust_temp_fault).state;
+            id(has_error).publish_state(err);
+
 # ─── Sensors ────────────────────────────────────────────────────────────────
 sensor:
   # ── Desired Target Temperature (HA helper mirror) ─────────────────────────
@@ -478,14 +568,36 @@ sensor:
       };
 
       if (block == 0x07FE) {
-        // Temperature block. Reg 0 (T01 suction) is usually disconnected
-        // (0x7FFD) on this model so we skip publishing it.
-        id(inlet_temp).publish_state(rd(1) / 10.0);
-        id(outlet_temp).publish_state(rd(2) / 10.0);
-        id(coil_temp).publish_state(rd(3) / 10.0);
-        id(ambient_temp).publish_state(rd(4) / 10.0);
-        id(exhaust_temp).publish_state(rd(5) / 10.0);
+        // Sensor failure detection. The heat pump signals different
+        // failure values per sensor:
+        //   T02 Inlet, T03 Outlet, T04 Coil, T06 Exhaust → 0x7FFD
+        //   T05 Ambient                                  → 0xFFF6 (-1.0°C)
+        // T01 Suction always reads 0x7FFD on single-system models.
+        auto pub_temp = [](esphome::template_::TemplateSensor *temp_sensor,
+                           esphome::template_::TemplateBinarySensor *fault_sensor,
+                           int16_t raw,
+                           bool is_ambient) {
+          bool fault;
+          if (is_ambient) {
+            fault = (raw == (int16_t)0xFFF6) || ((raw & 0xFFF0) == 0x7FF0);
+          } else {
+            fault = ((raw & 0xFFF0) == 0x7FF0);
+          }
+          fault_sensor->publish_state(fault);
+          if (fault) {
+            temp_sensor->publish_state(NAN);
+          } else {
+            temp_sensor->publish_state(raw / 10.0);
+          }
+        };
+
+        pub_temp(id(inlet_temp),   id(inlet_temp_fault),   rd(1), false);
+        pub_temp(id(outlet_temp),  id(outlet_temp_fault),  rd(2), false);
+        pub_temp(id(coil_temp),    id(coil_temp_fault),    rd(3), false);
+        pub_temp(id(ambient_temp), id(ambient_temp_fault), rd(4), true);
+        pub_temp(id(exhaust_temp), id(exhaust_temp_fault), rd(5), false);
         ESP_LOGI("heatpump", "Temps updated");
+
       } else if (block == 0x0416) {
         // Each mode has its own target register in this block:
         //   reg 0  (0x0416) = R01 Heating set
