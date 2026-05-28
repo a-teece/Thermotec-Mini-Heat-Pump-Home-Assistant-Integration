@@ -789,6 +789,9 @@ text_sensor:
               - script.execute:
                   id: write_mode
                   mode: !lambda 'return id(desired_mode).state;'
+
+
+        # After changing the mode reset the target temperature.
               - delay: 2s
               - script.execute: poll_heat_pump
 
