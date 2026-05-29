@@ -2,7 +2,7 @@
 
 An ESPHome firmware for an ESP32 that bridges a PHNIX pool heat pump to Home Assistant over Bluetooth, with no cloud account, no manufacturer app, and no internet connection required.
 
-The ESP polls the heat pump every five minutes (or continuously while awake), and publishes water temperatures, operating mode, target temperature, error codes, and component state to Home Assistant. Power, mode, and target temperature can be controlled from HA even while the ESP is in deep sleep.
+The ESP polls the heat pump on a configurable sleep schedule (default: every 5 minutes during the day, every 15 minutes at night), or continuously while awake, and publishes water temperatures, operating mode, target temperature, error codes, and component state to Home Assistant. Power, mode, and target temperature can be controlled from HA even while the ESP is in deep sleep.
 
 ---
 
@@ -58,7 +58,7 @@ The YAML is written and tested for the [DFRobot FireBeetle 2 ESP32-C6](https://w
 - The onboard LiPo charger and 1:1 voltage divider on GPIO0 make battery-powered deployment straightforward
 - The small form factor fits in a weatherproof enclosure near the heat pump
 
-For battery-powered deployments, a 3.7 V LiPo cell (1000–2000 mAh is a reasonable choice) gives roughly one to two weeks of runtime on the default 5-minute deep sleep cycle.
+For battery-powered deployments, a 3.7 V LiPo cell (1000–2000 mAh is a reasonable choice) gives roughly one to two weeks of runtime on the default day/night sleep schedule.
 
 ### Using a different ESP32 board
 
@@ -208,13 +208,30 @@ If you have USB power near your heat pump, you can run the ESP permanently from 
 
 Connect a 3.7 V LiPo cell to the FireBeetle 2's battery connector:
 
-- The ESP wakes every 5 minutes, connects to the heat pump, syncs any pending helper changes, polls sensor data, pushes everything to HA, then returns to deep sleep.
+- The ESP wakes on a day/night schedule, connects to the heat pump, syncs any pending helper changes, polls sensor data, pushes everything to HA, then returns to deep sleep.
 - Changes made to HA helpers (power, mode, temperature) while the ESP is asleep are queued in HA and applied on the next wake.
 - Battery voltage and charge percentage are reported as diagnostic entities.
+
+The sleep durations and day window are all configurable in the `substitutions:` block at the top of `pool-heatpump-proxy.yaml` — see [Sleep schedule](#sleep-schedule) below.
 
 ---
 
 ## Sleep mode and OTA updates
+
+### Sleep schedule
+
+The sleep duration varies by time of day to balance responsiveness against battery life:
+
+| Window | Default hours | Default duration | Substitution keys |
+|--------|--------------|-----------------|-------------------|
+| Day | 09:00 – 17:59 | 5 minutes | `deep_sleep_duration_day`, `day_start_hour`, `day_end_hour` |
+| Night | 18:00 – 08:59 | 15 minutes | `deep_sleep_duration_night` |
+
+All four values are set in the `substitutions:` block at the top of `pool-heatpump-proxy.yaml`. Hours use 24-hour whole-hour values (`"9"`, `"18"`, etc.). Durations accept ESPHome time strings (`5min`, `30s`, `1h`).
+
+If HA time has not yet synced when the device is ready to sleep, it falls back to the night duration.
+
+The schedule has no effect when **Pool Heater Prevent Deep Sleep** is on — the device stays awake and polls every 30 seconds regardless.
 
 ### How sleep works
 
