@@ -48,12 +48,22 @@ substitutions:
   #  Options: Heat, Cool, Auto
   home_assistant_desired_mode_select_name: input_select.pool_heater_mode
 
-  # How long the ESP sleeps between wake cycles (battery-powered deployments).
-  # Shorter = more responsive to HA helper changes, shorter battery life.
-  # Longer = less responsive, longer battery life.
-  # Has no effect if Pool Heater Prevent Deep Sleep is on (USB / always-on mode).
+  # Sleep duration during "day" hours (between day_start_hour and day_end_hour).
+  # Use shorter durations during the hours when you're likely to adjust settings.
   # Valid units: s (seconds), min (minutes), h (hours). E.g. "10min", "1h".
-  deep_sleep_duration: 5min
+  deep_sleep_duration_day: 5min
+
+  # Sleep duration during "night" hours (outside the day window).
+  # Longer duration saves battery overnight when changes are unlikely.
+  deep_sleep_duration_night: 15min
+
+  # Start and end of the "day" window in 24-hour whole hours (0–23).
+  # day_start_hour: device uses deep_sleep_duration_day from this hour onward.
+  # day_end_hour:   device switches back to deep_sleep_duration_night at this hour.
+  # Example: "9" and "18" = 09:00–17:59 day mode, 18:00–08:59 night mode.
+  # Has no effect if Pool Heater Prevent Deep Sleep is on (USB / always-on mode).
+  day_start_hour: "9"
+  day_end_hour: "18"
 
 # ─── Globals ────────────────────────────────────────────────────────────────
 globals:
@@ -126,10 +136,8 @@ esphome:
             - delay: 3s
 
             # Phase 8: Enter deep sleep until the next wake cycle.
-            - logger.log:
-                level: INFO
-                format: "Entering deep sleep"
-            - deep_sleep.enter: deep_sleep_1
+            # Duration is chosen by enter_deep_sleep_scheduled based on time of day.
+            - script.execute: enter_deep_sleep_scheduled
 
 esp32:
   board: dfrobot_firebeetle2_esp32c6
@@ -182,7 +190,7 @@ time:
 # wake cycle's work is complete. This avoids ever sleeping mid-BLE-write.
 deep_sleep:
   id: deep_sleep_1
-  sleep_duration: ${deep_sleep_duration}
+  sleep_duration: ${deep_sleep_duration_night}   # safety fallback; runtime uses enter_deep_sleep_scheduled
 
 # ─── BLE ────────────────────────────────────────────────────────────────────
 # Aggressive scan duty cycle (window == interval). We're awake briefly
@@ -298,7 +306,7 @@ binary_sensor:
               - component.update: battery_voltage
               - component.update: last_connected
               - delay: 5s
-              - deep_sleep.enter: deep_sleep_1
+              - script.execute: enter_deep_sleep_scheduled
             else:
               # Toggle just turned on while awake → cancel any pending sleep.
               - logger.log:
@@ -1264,6 +1272,34 @@ script:
             msg.push_back((crc >> 8) & 0xFF);
             ESP_LOGI("heatpump", "Set mode = %s", mode.c_str());
             return msg;
+
+  # Choose the correct deep sleep duration based on the current time of day,
+  # then enter deep sleep. Called from on_boot and from the prevent-deep-sleep
+  # on_state handler so the schedule is respected in both cases.
+  # Falls back to deep_sleep_duration_night if HA time has not yet synced.
+  - id: enter_deep_sleep_scheduled
+    then:
+      - if:
+          condition:
+            lambda: |-
+              auto now = id(ha_time).now();
+              return now.is_valid()
+                     && now.hour >= ${day_start_hour}
+                     && now.hour < ${day_end_hour};
+          then:
+            - logger.log:
+                level: INFO
+                format: "Entering deep sleep (day — ${deep_sleep_duration_day})"
+            - deep_sleep.enter:
+                id: deep_sleep_1
+                sleep_duration: ${deep_sleep_duration_day}
+          else:
+            - logger.log:
+                level: INFO
+                format: "Entering deep sleep (night — ${deep_sleep_duration_night})"
+            - deep_sleep.enter:
+                id: deep_sleep_1
+                sleep_duration: ${deep_sleep_duration_night}
 
 # ─── Periodic Polling (only effective while awake) ──────────────────────────
 # When prevent_deep_sleep is on, the device stays awake and this interval
