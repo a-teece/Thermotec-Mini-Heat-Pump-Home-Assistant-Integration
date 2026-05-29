@@ -48,6 +48,13 @@ substitutions:
   #  Options: Heat, Cool, Auto
   home_assistant_desired_mode_select_name: input_select.pool_heater_mode
 
+  # How long the ESP sleeps between wake cycles (battery-powered deployments).
+  # Shorter = more responsive to HA helper changes, shorter battery life.
+  # Longer = less responsive, longer battery life.
+  # Has no effect if Pool Heater Prevent Deep Sleep is on (USB / always-on mode).
+  # Valid units: s (seconds), min (minutes), h (hours). E.g. "10min", "1h".
+  deep_sleep_duration: 5min
+
 # ─── Globals ────────────────────────────────────────────────────────────────
 globals:
   # Tracks whether the BLE link to the heat pump is up.
@@ -173,13 +180,9 @@ time:
 # ─── Deep Sleep ─────────────────────────────────────────────────────────────
 # No run_duration set — sleep is entered explicitly from on_boot once the
 # wake cycle's work is complete. This avoids ever sleeping mid-BLE-write.
-#
-# sleep_duration controls how long the chip stays off between cycles.
-# 5 min is a reasonable default; raise it to extend battery life at the
-# cost of slower response to HA helper changes.
 deep_sleep:
   id: deep_sleep_1
-  sleep_duration: 5min
+  sleep_duration: ${deep_sleep_duration}
 
 # ─── BLE ────────────────────────────────────────────────────────────────────
 # Aggressive scan duty cycle (window == interval). We're awake briefly
