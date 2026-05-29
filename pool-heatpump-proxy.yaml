@@ -653,12 +653,12 @@ sensor:
         id(current_power_state).publish_state(is_on);
 
         // Mode at offset 11 (register 0x03F4)
-        // 0 = Heat, 1 = Cool, 2 = Auto
+        // 0 = Cool, 1 = Heat, 2 = Auto
         int16_t mode = rd(11);
         const char *mode_str;
         switch (mode) {
-          case 0:  mode_str = "Heat"; break;
-          case 1:  mode_str = "Cool"; break;
+          case 0:  mode_str = "Cool"; break;
+          case 1:  mode_str = "Heat"; break;
           case 2:  mode_str = "Auto"; break;
           default: mode_str = "Unknown"; break;
         }
@@ -1216,9 +1216,9 @@ script:
   # match observed behaviour. Register 0x03F5's purpose isn't fully
   # understood but appears mode-dependent.
   #
-  # Captured commands (CRCs verified):
-  #   HEAT: 63 10 03 F4 00 02 04 00 00 00 00 1C 51
-  #   COOL: 63 10 03 F4 00 02 04 00 01 00 88 4D F7
+  # Captured commands (CRCs verified, labels corrected — 0x00 is Cool, 0x01 is Heat):
+  #   COOL: 63 10 03 F4 00 02 04 00 00 00 00 1C 51
+  #   HEAT: 63 10 03 F4 00 02 04 00 01 00 88 4D F7
   #   AUTO: 63 10 03 F4 00 02 04 00 02 00 8C BC 34
   - id: write_mode
     parameters:
@@ -1232,14 +1232,17 @@ script:
             // Translate string mode to (mode_val, second_reg) pair.
             // The second register's exact meaning is unknown but the values
             // below match what the official AquaTemp app sends.
+            // Note: 0x00 = Cool, 0x01 = Heat, 0x02 = Auto (confirmed by observation).
             uint8_t mode_lo, sec_hi, sec_lo;
-            if (mode == "Cool") {
+            if (mode == "Heat") {
               mode_lo = 0x01; sec_hi = 0x00; sec_lo = 0x88;
+            } else if (mode == "Cool") {
+              mode_lo = 0x00; sec_hi = 0x00; sec_lo = 0x00;
             } else if (mode == "Auto") {
               mode_lo = 0x02; sec_hi = 0x00; sec_lo = 0x8C;
             } else {
-              // Default to Heat (mode 0) — also covers any unrecognised string
-              mode_lo = 0x00; sec_hi = 0x00; sec_lo = 0x00;
+              // Default to Heat for any unrecognised string
+              mode_lo = 0x01; sec_hi = 0x00; sec_lo = 0x88;
             }
 
             std::vector<uint8_t> msg = {

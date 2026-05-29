@@ -270,7 +270,7 @@ and "H tab" engineer-menu settings. Register addresses fall in the range
 | Reg # | Addr | Setting | Type | Values | Status |
 |---|---|---|---|---|---|
 | 10 | `0x03F3` | **Power state** | bool | 0=Off, 1=On | ✅ |
-| 11 | `0x03F4` | **Mode** | enum | 0=Heat, 1=Cool, 2=Auto | ✅ |
+| 11 | `0x03F4` | **Mode** | enum | 0=Cool, 1=Heat, 2=Auto | ✅ |
 | 12 | `0x03F5` | Unknown ("mode companion") | — | See §6.1 | ❓ |
 | 17 | `0x03FA` | **H01** Power-down memory | bool | 0=No, 1=Yes | 📐 |
 | 18 | `0x03FB` | **H02** Temperature unit | enum | 0=°C, 1=°F (inferred) | 📐 |
@@ -484,15 +484,15 @@ Mode changes are written as a **two-register** write covering `0x03F4`
 and `0x03F5`:
 
 ```
-HEAT:  63 10 03 F4 00 02 04 00 00 00 00 1C 51
-COOL:  63 10 03 F4 00 02 04 00 01 00 88 4D F7
+COOL:  63 10 03 F4 00 02 04 00 00 00 00 1C 51
+HEAT:  63 10 03 F4 00 02 04 00 01 00 88 4D F7
 AUTO:  63 10 03 F4 00 02 04 00 02 00 8C BC 34
 ```
 
-- `0x03F4` is the mode: `0` Heat, `1` Cool, `2` Auto.
+- `0x03F4` is the mode: `0` Cool, `1` Heat, `2` Auto.
 - `0x03F5` ("mode companion") is a value whose semantics are unknown
-  but which the app sets to specific values per mode: `0x0000` for Heat,
-  `0x0088` for Cool, `0x008C` for Auto.
+  but which the app sets to specific values per mode: `0x0000` for Cool,
+  `0x0088` for Heat, `0x008C` for Auto.
 
 ⚠️ **Recommendation:** mirror the app exactly. Writing only register
 `0x03F4` (single-register write) is untested and may be rejected by the
