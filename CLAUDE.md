@@ -115,6 +115,20 @@ reason to revisit, and update this section if they change.
      (including retries) finish, so retries get the time they need while the
      device still sleeps promptly to save battery.
 
+8. **`Last Connected` heartbeat is retained across deep sleep.** The timestamp
+   is stamped from the `time:` component's `on_time_sync` (fires on every
+   boot/reconnect, in *both* sleep and prevent-sleep mode — the prevent-sleep
+   branch of `on_boot` never reaches the sleep path, so it would otherwise sit
+   at `unknown` the whole debug session). The value lives in the
+   `last_connected_str` **restored global** (`char[24]`, not `std::string` —
+   only trivially-copyable types restore). `on_boot` Phase 0 republishes it
+   *synchronously, before the API connection wait*, so HA sees the previous
+   timestamp the instant it reconnects and never records an `unknown` for the
+   entity each wake. Because ESPHome's periodic preferences flush is far longer
+   than a wake, `enter_deep_sleep_scheduled` calls `global_preferences->sync()`
+   to force the value to flash before sleeping (≈1 small flash write per wake;
+   NVS wear-levels this — not a practical lifetime concern on esp-idf).
+
 ## Home Assistant setup
 
 The device depends on four HA helpers (created under Settings → Devices &
