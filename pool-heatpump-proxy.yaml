@@ -160,10 +160,12 @@ esphome:
                   lambda: 'return id(reconcile_done);'
                 timeout: 90s
 
-            # Phase 6: Refresh diagnostic readings before sleep.
-            # These are pushed to HA just before we drop the WiFi link.
+            # Phase 6: Refresh battery reading before sleep, pushed to HA just
+            # before we drop the WiFi link. (last_connected is stamped earlier,
+            # on time-sync — see the time: component — so it's not refreshed
+            # here; doing so would only re-stamp it ~13s later and double the
+            # logbook entries per wake.)
             - component.update: battery_voltage
-            - component.update: last_connected
 
             # Phase 7: Final settle time so HA receives everything.
             - delay: 3s
@@ -217,6 +219,16 @@ captive_portal:
 time:
   - platform: homeassistant
     id: ha_time
+    on_time_sync:
+      then:
+        # Stamp the Last Connected heartbeat as soon as HA time is available.
+        # This fires shortly after the API connects on every boot/reconnect,
+        # in BOTH sleep and prevent-deep-sleep mode. Without it, the awake
+        # (prevent-sleep) branch of on_boot never publishes last_connected at
+        # all — leaving it stuck at 'unknown' the whole debug session — and
+        # the sleep-cycle path only stamped it ~13s into each wake (Phase 6),
+        # so the entity flapped to 'unknown' at the start of every wake.
+        - component.update: last_connected
 
 # ─── Deep Sleep ─────────────────────────────────────────────────────────────
 # No run_duration set — sleep is entered explicitly from on_boot once the
@@ -947,8 +959,10 @@ sensor:
 
 # ─── Text Sensors ───────────────────────────────────────────────────────────
 text_sensor:
-  # Wall-clock time of the last successful wake. Acts as a heartbeat:
-  # if this value stops updating, the device isn't waking properly.
+  # Wall-clock time the device last came online and synced with HA. Acts as a
+  # heartbeat: if this value stops updating, the device isn't waking properly.
+  # update_interval is 'never' — it's stamped explicitly from the time:
+  # component's on_time_sync (every boot/reconnect, both sleep modes).
   - platform: template
     name: "Last Connected"
     id: last_connected
