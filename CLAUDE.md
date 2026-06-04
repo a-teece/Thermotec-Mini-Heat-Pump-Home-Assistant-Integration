@@ -85,16 +85,27 @@ reason to revisit, and update this section if they change.
    Temperature sensors also publish `NAN` on probe failure so they go
    *unavailable* in HA — a useful visual signal on its own.
 
-7. **Writes are verified, not fire-and-forget.** A single BLE write is
-   occasionally dropped, and in a sleep cycle the device would sleep before
-   noticing — so a change silently failed until a later wake. Each setting has
-   a verify-and-retry script — `sync_power_state`, `sync_target_temp`,
+7. **Writes are verified, not fire-and-forget.** Each setting has a
+   verify-and-retry script — `sync_power_state`, `sync_target_temp`,
    `sync_mode` — that writes, re-polls, re-checks the corresponding `current_*`
    sensor, and retries (capped at 3) until the heat pump confirms the requested
    value. They're used from both the immediate helper `on_value`/`on_state`
    paths and the `on_connect` reconcile. Power was the worst-hit symptom (most
    frequently toggled, binary, and previously the last of three back-to-back
-   un-spaced writes) but the flaw was shared by all three.
+   un-spaced writes) but the flaw was shared by all three. Two distinct
+   failure modes are addressed:
+   - **Dropped write.** A single un-acked BLE write is occasionally lost. The
+     loop re-checks after polling and writes again.
+   - **No reading to compare against (the reason it often didn't self-heal).**
+     The old reconcile guarded on `current_*.has_state()` and silently did
+     *nothing* when that sensor had no state. `current_*` is populated only by
+     a poll's notify fragments, and a deep-sleep wake polls **once**; if that
+     fragment is dropped or arrives after the reconcile's fixed wait, the
+     change was never even attempted — and with one read attempt per wake it
+     did not reliably recover on its own (which is why prevent-deep-sleep
+     mode, polling every 30s, felt reliable). The loop now writes **even with
+     no reading** and re-polls up to 3× per wake, so a slow/lost fragment no
+     longer aborts the sync.
    - In `on_connect` the three syncs run **serialised via `script.wait`**
      (mode → target → power), so no two writes collide, and mode-first means
      the target lands in the now-current mode's register — carrying the
