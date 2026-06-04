@@ -85,6 +85,18 @@ reason to revisit, and update this section if they change.
    Temperature sensors also publish `NAN` on probe failure so they go
    *unavailable* in HA — a useful visual signal on its own.
 
+7. **Power writes are verified, not fire-and-forget.** A single BLE write to
+   the power register (`0x03F3`) is occasionally dropped, and in a sleep cycle
+   the device would sleep before noticing — so a toggle silently failed until
+   a later wake. The `sync_power_state` script writes, re-polls, re-checks
+   `current_power_state`, and retries (capped at 3) until the heat pump
+   confirms the requested state. It's used from both the immediate
+   `desired_power_state` `on_state` path and the `on_connect` reconcile.
+   Relatedly, `on_boot` no longer sleeps after a fixed delay — it waits on the
+   `reconcile_done` global that `on_connect` sets once reconciliation
+   (including power retries) finishes, so retries get the time they need while
+   the device still sleeps promptly to save battery.
+
 ## Home Assistant setup
 
 The device depends on four HA helpers (created under Settings → Devices &
