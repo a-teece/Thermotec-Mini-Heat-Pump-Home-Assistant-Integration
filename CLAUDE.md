@@ -85,6 +85,36 @@ reason to revisit, and update this section if they change.
    Temperature sensors also publish `NAN` on probe failure so they go
    *unavailable* in HA — a useful visual signal on its own.
 
+7. **Writes are verified, not fire-and-forget.** Each setting has a
+   verify-and-retry script — `sync_power_state`, `sync_target_temp`,
+   `sync_mode` — that writes, re-polls, re-checks the corresponding `current_*`
+   sensor, and retries (capped at 3) until the heat pump confirms the requested
+   value. They're used from both the immediate helper `on_value`/`on_state`
+   paths and the `on_connect` reconcile. Power was the worst-hit symptom (most
+   frequently toggled, binary, and previously the last of three back-to-back
+   un-spaced writes) but the flaw was shared by all three. Two distinct
+   failure modes are addressed:
+   - **Dropped write.** A single un-acked BLE write is occasionally lost. The
+     loop re-checks after polling and writes again.
+   - **No reading to compare against (the reason it often didn't self-heal).**
+     The old reconcile guarded on `current_*.has_state()` and silently did
+     *nothing* when that sensor had no state. `current_*` is populated only by
+     a poll's notify fragments, and a deep-sleep wake polls **once**; if that
+     fragment is dropped or arrives after the reconcile's fixed wait, the
+     change was never even attempted — and with one read attempt per wake it
+     did not reliably recover on its own (which is why prevent-deep-sleep
+     mode, polling every 30s, felt reliable). The loop now writes **even with
+     no reading** and re-polls up to 3× per wake, so a slow/lost fragment no
+     longer aborts the sync.
+   - In `on_connect` the three syncs run **serialised via `script.wait`**
+     (mode → target → power), so no two writes collide, and mode-first means
+     the target lands in the now-current mode's register — carrying the
+     setpoint across a mode change.
+   - `on_boot` no longer sleeps after a fixed delay — it waits on the
+     `reconcile_done` global that `on_connect` sets once all three syncs
+     (including retries) finish, so retries get the time they need while the
+     device still sleeps promptly to save battery.
+
 ## Home Assistant setup
 
 The device depends on four HA helpers (created under Settings → Devices &
@@ -136,9 +166,11 @@ over-temperature (P82) faults.
 
 In rough priority order:
 
-- [ ] **Mode-change target re-sync** — after a mode change, re-poll then
-  push the desired target into the new mode's register so the target
-  carries across modes instead of leaving the slider out of sync.
+- [x] **Mode-change target re-sync** — done. `sync_mode` is followed by
+  `sync_target_temp` (in both the `desired_mode` `on_value` path and the
+  `on_connect` reconcile, which now runs mode-first), so the desired target
+  is pushed into the new mode's register instead of leaving the slider out
+  of sync.
 - [ ] Consider exposing read-only H-tab engineering settings (comp stop
   temp, exhaust limit) as diagnostics if useful.
 
