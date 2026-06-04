@@ -75,10 +75,18 @@ globals:
     initial_value: 'false'
     restore_value: no
 
-  # Counts power-write attempts within a single sync_power_state run so the
-  # verify-and-retry loop has a bounded number of tries. Reset at the start
-  # of each run; not meaningful across wakes.
+  # Counts write attempts within a single sync_* run so each verify-and-retry
+  # loop has a bounded number of tries. Reset at the start of each run; not
+  # meaningful across wakes.
   - id: power_sync_attempts
+    type: int
+    initial_value: '0'
+    restore_value: no
+  - id: target_sync_attempts
+    type: int
+    initial_value: '0'
+    restore_value: no
+  - id: mode_sync_attempts
     type: int
     initial_value: '0'
     restore_value: no
@@ -139,17 +147,18 @@ esphome:
                 timeout: 30s
 
             # Phase 5: Wait for the on_connect handler to finish reconciling.
-            # It polls the heat pump, then syncs target/mode/power. The power
-            # sync verifies the write landed and retries on failure, so its
+            # It polls the heat pump, then syncs mode/target/power. Each sync
+            # verifies the write landed and retries on failure, so the total
             # duration varies — we wait for the explicit reconcile_done signal
             # rather than a fixed delay. This both gives retries time to run
-            # and lets us sleep promptly once done (saving battery). The
-            # timeout is a safety net so we always reach deep sleep even if
-            # BLE drops mid-reconcile.
+            # and lets us sleep promptly once done (saving battery): wait_until
+            # returns the instant reconcile_done is set, so the generous
+            # timeout costs nothing in the normal case — it's only a safety net
+            # to guarantee we reach deep sleep if BLE drops mid-reconcile.
             - wait_until:
                 condition:
                   lambda: 'return id(reconcile_done);'
-                timeout: 45s
+                timeout: 90s
 
             # Phase 6: Refresh diagnostic readings before sleep.
             # These are pushed to HA just before we drop the WiFi link.
@@ -252,53 +261,26 @@ ble_client:
         #   - Catching up if the helper changed while BLE was down
 
 
-        # ── Target temp ──
-        - if:
-            condition:
-              lambda: |-
-                if (!id(desired_target_temp).has_state()) return false;
-                if (!id(current_target_temp).has_state()) return false;
-                float desired = id(desired_target_temp).state;
-                float current = id(current_target_temp).state;
-                // 0.05°C tolerance avoids spurious writes from float
-                // precision (heat pump stores in 0.1°C steps).
-                return fabsf(desired - current) > 0.05f;
-            then:
-              - logger.log:
-                  level: INFO
-                  format: "Syncing target: HA=%.1f, heat pump=%.1f"
-                  args: ['id(desired_target_temp).state',
-                         'id(current_target_temp).state']
-              - script.execute:
-                  id: write_target_temp
-                  temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
+        # Each setting is reconciled by its own verify-and-retry script
+        # (write → re-poll → re-check → retry, capped). A single BLE write is
+        # occasionally dropped, and in a sleep cycle the device would sleep
+        # before noticing — leaving the helper and heat pump out of sync until
+        # a later wake. The sync_* scripts close that gap.
+        #
+        # script.wait serialises them so each one's write+poll completes before
+        # the next begins — no back-to-back writes colliding. Mode is synced
+        # FIRST so that the target then lands in the (now correct) active
+        # mode's register, carrying the setpoint across a mode change.
 
         # ── Mode ──
-        - if:
-            condition:
-              lambda: |-
-                if (!id(desired_mode).has_state()) return false;
-                if (!id(current_mode).has_state()) return false;
-                return id(desired_mode).state != id(current_mode).state;
-            then:
-              - logger.log:
-                  level: INFO
-                  format: "Syncing mode: HA=%s, heat pump=%s"
-                  args: ['id(desired_mode).state.c_str()',
-                         'id(current_mode).state.c_str()']
-              - script.execute:
-                  id: write_mode
-                  mode: !lambda 'return id(desired_mode).state;'
+        - script.execute: sync_mode
+        - script.wait: sync_mode
 
-        # ──  Power State ──
-        # A single fire-and-forget power write is occasionally dropped over
-        # BLE, and in a sleep cycle the device would sleep before noticing —
-        # leaving the helper and heat pump out of sync until a later wake.
-        # sync_power_state writes, re-polls, and retries until the heat pump
-        # confirms the requested state (or a retry cap is reached). The 2s
-        # delay first lets any mode/target writes above settle so this write
-        # doesn't collide with them.
-        - delay: 2s
+        # ── Target temp ──
+        - script.execute: sync_target_temp
+        - script.wait: sync_target_temp
+
+        # ── Power State ──
         - script.execute: sync_power_state
         - script.wait: sync_power_state
 
@@ -543,30 +525,19 @@ sensor:
     entity_id: ${home_assistant_desired_target_temp_number_name}
     on_value:
       then:
-        # Only write if BLE is up, both sensors have state, and the
-        # helper differs from the heat pump's current value. The has_state
-        # checks prevent firing during the initial sync at boot before
-        # we've received the heat pump's current target.
+        # Apply immediately if the heat pump is reachable. sync_target_temp
+        # writes, re-polls, and retries until current_target_temp matches, so
+        # a single dropped BLE write no longer silently fails. If BLE is down,
+        # the on_connect handler reconciles on the next wake.
         - if:
             condition:
-              lambda: |-
-                if (!id(current_target_temp).has_state()) return false;
-                if (!id(desired_target_temp).has_state()) return false;
-                if (!id(ble_connected)) return false;
-                float desired = id(desired_target_temp).state;
-                float current = id(current_target_temp).state;
-                return fabsf(desired - current) > 0.05f;
+              lambda: 'return id(ble_connected);'
             then:
               - logger.log:
                   level: INFO
-                  format: "Helper changed to %.1f — writing to heat pump"
+                  format: "Helper changed target to %.1f — syncing to heat pump"
                   args: ['id(desired_target_temp).state']
-              - script.execute:
-                  id: write_target_temp
-                  temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
-              - delay: 2s
-              # Re-poll to confirm the write took effect
-              - script.execute: poll_heat_pump
+              - script.execute: sync_target_temp
 
   # ── BLE Notification Parser (internal) ────────────────────────────────────
   # This sensor subscribes to BLE notifications from the heat pump and parses
@@ -1005,46 +976,25 @@ text_sensor:
     entity_id: ${home_assistant_desired_mode_select_name}
     on_value:
       then:
-        # Apply immediately if heat pump is reachable and value differs.
-        # Otherwise on_connect handler will catch it on the next wake.
+        # Apply immediately if the heat pump is reachable. sync_mode writes,
+        # re-polls, and retries until current_mode matches. If BLE is down,
+        # the on_connect handler reconciles on the next wake.
         - if:
             condition:
-              lambda: |-
-                if (!id(current_mode).has_state()) return false;
-                if (!id(ble_connected)) return false;
-                return id(desired_mode).state != id(current_mode).state;
+              lambda: 'return id(ble_connected);'
             then:
               - logger.log:
                   level: INFO
-                  format: "Helper changed mode to %s — writing to heat pump"
+                  format: "Helper changed mode to %s — syncing to heat pump"
                   args: ['id(desired_mode).state.c_str()']
-              - script.execute:
-                  id: write_mode
-                  mode: !lambda 'return id(desired_mode).state;'
+              - script.execute: sync_mode
+              - script.wait: sync_mode
 
-              # Give the write a moment, then re-poll so current_target_temp
-              # reflects the NEW mode's target register.
-              - delay: 2s
-              - script.execute: poll_heat_pump
-
-              # Wait for the poll's notifications to arrive, then push the
-              # desired target into the new mode's register if it differs.
-              - delay: 3s
-              - if:
-                  condition:
-                    lambda: |-
-                      if (!id(desired_target_temp).has_state()) return false;
-                      if (!id(current_target_temp).has_state()) return false;
-                      return fabsf(id(desired_target_temp).state -
-                                   id(current_target_temp).state) > 0.05f;
-                  then:
-                    - logger.log:
-                        level: INFO
-                        format: "Mode changed — pushing target %.1f to new mode's register"
-                        args: ['id(desired_target_temp).state']
-                    - script.execute:
-                        id: write_target_temp
-                        temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
+              # sync_mode's final poll has refreshed current_target_temp from
+              # the NEW mode's register. Now push the desired target into it so
+              # the setpoint carries across the mode change (sync_target_temp
+              # no-ops if it already matches).
+              - script.execute: sync_target_temp
 
   # ─── Current Mode (read from BLE notify) ─────────────────────────────────
   # Reflects the heat pump's actual mode as reported via BLE. Updated by the
@@ -1214,6 +1164,60 @@ script:
                      mode_str.c_str(), temp_x10 / 10.0, addr_hi, addr_lo);
             return msg;
 
+  # Reconcile the heat pump's target temperature with the desired (HA helper)
+  # value, with verification and retry — same pattern as sync_power_state.
+  # After each write we re-poll and re-check current_target_temp; if it still
+  # differs (beyond the 0.05°C float tolerance) we try again, up to a cap.
+  #
+  # Note: write_target_temp clamps to the active mode's range, so if the
+  # desired value is outside that range the loop will retry to the cap and
+  # then warn — the clamped value is the best the heat pump will accept.
+  - id: sync_target_temp
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(desired_target_temp).has_state() && id(ble_connected);'
+          then:
+            - lambda: 'id(target_sync_attempts) = 0;'
+            - while:
+                condition:
+                  lambda: |-
+                    if (!id(ble_connected)) return false;
+                    if (id(target_sync_attempts) >= 3) return false;
+                    // No reading yet — loop so we write and poll to get one.
+                    if (!id(current_target_temp).has_state()) return true;
+                    // 0.05°C tolerance avoids spurious writes from float
+                    // precision (heat pump stores in 0.1°C steps).
+                    return fabsf(id(desired_target_temp).state -
+                                 id(current_target_temp).state) > 0.05f;
+                then:
+                  - lambda: 'id(target_sync_attempts) += 1;'
+                  - logger.log:
+                      level: INFO
+                      format: "Syncing target (attempt %d/3): HA=%.1f"
+                      args: ['id(target_sync_attempts)',
+                             'id(desired_target_temp).state']
+                  - script.execute:
+                      id: write_target_temp
+                      temp_x10: !lambda 'return (int)(id(desired_target_temp).state * 10);'
+                  - delay: 2s
+                  - script.execute: poll_heat_pump
+                  - delay: 3s
+            - lambda: |-
+                bool synced = id(current_target_temp).has_state() &&
+                              fabsf(id(desired_target_temp).state -
+                                    id(current_target_temp).state) <= 0.05f;
+                if (synced) {
+                  ESP_LOGI("heatpump", "Target confirmed: %.1f",
+                           id(desired_target_temp).state);
+                } else {
+                  ESP_LOGW("heatpump",
+                           "Target NOT confirmed after %d attempts (HA=%.1f) — "
+                           "will retry on next reconcile",
+                           id(target_sync_attempts), id(desired_target_temp).state);
+                }
+
   # Write the power on/off state to register 0x03F3.
   # Captured commands:
   #   OFF: 63 10 03 F3 00 01 02 00 00 30 F1
@@ -1352,6 +1356,53 @@ script:
             msg.push_back((crc >> 8) & 0xFF);
             ESP_LOGI("heatpump", "Set mode = %s", mode.c_str());
             return msg;
+
+  # Reconcile the heat pump's operating mode with the desired (HA helper)
+  # value, with verification and retry — same pattern as sync_power_state.
+  # After each write we re-poll and re-check current_mode; if it still differs
+  # we try again, up to a cap. Callers that need the target re-pushed into the
+  # new mode's register should run sync_target_temp after this completes.
+  - id: sync_mode
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(desired_mode).has_state() && id(ble_connected);'
+          then:
+            - lambda: 'id(mode_sync_attempts) = 0;'
+            - while:
+                condition:
+                  lambda: |-
+                    if (!id(ble_connected)) return false;
+                    if (id(mode_sync_attempts) >= 3) return false;
+                    // No reading yet — loop so we write and poll to get one.
+                    if (!id(current_mode).has_state()) return true;
+                    return id(desired_mode).state != id(current_mode).state;
+                then:
+                  - lambda: 'id(mode_sync_attempts) += 1;'
+                  - logger.log:
+                      level: INFO
+                      format: "Syncing mode (attempt %d/3): HA=%s"
+                      args: ['id(mode_sync_attempts)',
+                             'id(desired_mode).state.c_str()']
+                  - script.execute:
+                      id: write_mode
+                      mode: !lambda 'return id(desired_mode).state;'
+                  - delay: 2s
+                  - script.execute: poll_heat_pump
+                  - delay: 3s
+            - lambda: |-
+                bool synced = id(current_mode).has_state() &&
+                              id(desired_mode).state == id(current_mode).state;
+                if (synced) {
+                  ESP_LOGI("heatpump", "Mode confirmed: %s",
+                           id(desired_mode).state.c_str());
+                } else {
+                  ESP_LOGW("heatpump",
+                           "Mode NOT confirmed after %d attempts (HA=%s) — "
+                           "will retry on next reconcile",
+                           id(mode_sync_attempts), id(desired_mode).state.c_str());
+                }
 
   # Choose the correct deep sleep duration based on the current time of day,
   # then enter deep sleep. Called from on_boot and from the prevent-deep-sleep
