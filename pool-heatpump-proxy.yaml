@@ -100,6 +100,18 @@ globals:
     initial_value: 'false'
     restore_value: no
 
+  # Last successful HA-sync timestamp ("YYYY-MM-DD HH:MM:SS"), RETAINED across
+  # deep sleep so it can be published the instant HA reconnects — before the
+  # API hands the entity its first state. Without this, the template sensor
+  # has no value on a fresh wake and HA records an 'unknown' every cycle.
+  # Stored as a fixed char array (trivially copyable → safely restorable;
+  # std::string globals can't be restored). Zero-initialised on first-ever
+  # boot, so an empty first byte means "nothing stored yet". Persisted to
+  # flash by global_preferences->sync() just before deep sleep.
+  - id: last_connected_str
+    type: char[24]
+    restore_value: yes
+
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
@@ -108,6 +120,19 @@ esphome:
     # Priority -100 places us late in the boot sequence.
     priority: -100.0
     then:
+      # ── Phase 0: Republish the retained heartbeat BEFORE the API connects ─
+      # Runs synchronously at the very start of on_boot — before the
+      # wait_until below yields to the loop that services API clients — so the
+      # value is already set when HA subscribes to states. HA therefore sees
+      # the previous timestamp immediately on reconnect and never records an
+      # 'unknown' for this entity. on_time_sync refreshes it to the new wake
+      # time a few seconds later. Skipped on the first-ever boot (empty global).
+      - if:
+          condition:
+            lambda: 'return id(last_connected_str)[0] != ''\0'';'
+          then:
+            - component.update: last_connected
+
       # ── Phase 1: Wait for the HA API ────────────────────────────────────
       # We need the API to read the prevent-sleep helper and the desired
       # target temp helper. Without it we'd risk sleeping when we shouldn't.
@@ -160,10 +185,12 @@ esphome:
                   lambda: 'return id(reconcile_done);'
                 timeout: 90s
 
-            # Phase 6: Refresh diagnostic readings before sleep.
-            # These are pushed to HA just before we drop the WiFi link.
+            # Phase 6: Refresh battery reading before sleep, pushed to HA just
+            # before we drop the WiFi link. (last_connected is stamped earlier,
+            # on time-sync — see the time: component — so it's not refreshed
+            # here; doing so would only re-stamp it ~13s later and double the
+            # logbook entries per wake.)
             - component.update: battery_voltage
-            - component.update: last_connected
 
             # Phase 7: Final settle time so HA receives everything.
             - delay: 3s
@@ -217,6 +244,26 @@ captive_portal:
 time:
   - platform: homeassistant
     id: ha_time
+    on_time_sync:
+      then:
+        # Stamp the Last Connected heartbeat as soon as HA time is available.
+        # This fires shortly after the API connects on every boot/reconnect,
+        # in BOTH sleep and prevent-deep-sleep mode. Without it, the awake
+        # (prevent-sleep) branch of on_boot never publishes last_connected at
+        # all — leaving it stuck at 'unknown' the whole debug session.
+        #
+        # We write the formatted timestamp into the retained global (not just
+        # the sensor) so Phase 0 of on_boot can republish it on the next wake
+        # before the API connects. component.update then re-reads the global
+        # and publishes it now.
+        - lambda: |-
+            auto now = id(ha_time).now();
+            if (!now.is_valid()) return;
+            snprintf(id(last_connected_str), sizeof(id(last_connected_str)),
+                     "%04d-%02d-%02d %02d:%02d:%02d",
+                     now.year, now.month, now.day_of_month,
+                     now.hour, now.minute, now.second);
+        - component.update: last_connected
 
 # ─── Deep Sleep ─────────────────────────────────────────────────────────────
 # No run_duration set — sleep is entered explicitly from on_boot once the
@@ -947,8 +994,13 @@ sensor:
 
 # ─── Text Sensors ───────────────────────────────────────────────────────────
 text_sensor:
-  # Wall-clock time of the last successful wake. Acts as a heartbeat:
-  # if this value stops updating, the device isn't waking properly.
+  # Wall-clock time the device last came online and synced with HA. Acts as a
+  # heartbeat: if this value stops updating, the device isn't waking properly.
+  # update_interval is 'never' — it's published explicitly: from on_time_sync
+  # (fresh stamp each wake, both sleep modes) and from on_boot Phase 0 (the
+  # retained value, republished before the API connects so HA never sees
+  # 'unknown'). The value itself lives in the retained last_connected_str
+  # global; this lambda just surfaces it.
   - platform: template
     name: "Last Connected"
     id: last_connected
@@ -956,14 +1008,10 @@ text_sensor:
     entity_category: diagnostic
     update_interval: never
     lambda: |-
-      auto now = id(ha_time).now();
-      // Return nothing if time hasn't synced yet — avoids a garbage stamp.
-      if (!now.is_valid()) return {};
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
-               now.year, now.month, now.day_of_month,
-               now.hour, now.minute, now.second);
-      return {buf};
+      // Nothing stored yet (first-ever boot) — stay unknown rather than
+      // publish an empty string.
+      if (id(last_connected_str)[0] == '\0') return {};
+      return std::string(id(last_connected_str));
 
   # ─── Desired Mode (mirror of HA helper) ──────────────────────────────────
   # Mirrors the input_select helper. Like the other mirrored helpers, the
@@ -1410,6 +1458,11 @@ script:
   # Falls back to deep_sleep_duration_night if HA time has not yet synced.
   - id: enter_deep_sleep_scheduled
     then:
+      # Force any pending preferences (notably last_connected_str) to flash
+      # now. ESPHome's periodic flush interval is far longer than a wake
+      # cycle, so without this explicit sync the retained timestamp written
+      # this wake would not survive the imminent deep sleep.
+      - lambda: 'global_preferences->sync();'
       - if:
           condition:
             lambda: |-
