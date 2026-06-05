@@ -112,6 +112,14 @@ globals:
     type: char[24]
     restore_value: yes
 
+  # Last known operating mode ("Heat", "Cool", "Auto") RETAINED across deep
+  # sleep. Text sensors don't support restore_value natively, so we mirror
+  # the value in a char[] global (same pattern as last_connected_str).
+  # Published in Phase 0 before the API connects so HA never shows 'unknown'.
+  - id: current_mode_str
+    type: char[8]
+    restore_value: yes
+
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
@@ -120,18 +128,23 @@ esphome:
     # Priority -100 places us late in the boot sequence.
     priority: -100.0
     then:
-      # ── Phase 0: Republish the retained heartbeat BEFORE the API connects ─
+      # ── Phase 0: Republish retained values BEFORE the API connects ────────
       # Runs synchronously at the very start of on_boot — before the
-      # wait_until below yields to the loop that services API clients — so the
-      # value is already set when HA subscribes to states. HA therefore sees
-      # the previous timestamp immediately on reconnect and never records an
-      # 'unknown' for this entity. on_time_sync refreshes it to the new wake
-      # time a few seconds later. Skipped on the first-ever boot (empty global).
+      # wait_until below yields to the loop that services API clients — so
+      # values are already set when HA subscribes to states. HA therefore sees
+      # previous values immediately on reconnect and never records 'unknown'.
+      # Numeric/binary template sensors use restore_value: true directly;
+      # text sensors (which don't support restore_value) use char[] globals.
       - if:
           condition:
             lambda: 'return id(last_connected_str)[0] != ''\0'';'
           then:
             - component.update: last_connected
+      - if:
+          condition:
+            lambda: 'return id(current_mode_str)[0] != ''\0'';'
+          then:
+            - lambda: 'id(current_mode).publish_state(std::string(id(current_mode_str)));'
 
       # ── Phase 1: Wait for the HA API ────────────────────────────────────
       # We need the API to read the prevent-sleep helper and the desired
@@ -402,6 +415,7 @@ binary_sensor:
     name: "Power State"
     icon: "mdi:power"
     device_class: power
+    restore_value: true
 
   # ── BLE link status ───────────────────────────────────────────────────────
   - platform: template
@@ -419,6 +433,7 @@ binary_sensor:
     icon: "mdi:engine"
     device_class: running
     entity_category: diagnostic
+    restore_value: true
     filters:
       - delayed_on_off: 1s    # debounce: only publish if state holds for 1 second to remove the duplicate BLE responses
 
@@ -428,6 +443,7 @@ binary_sensor:
     icon: "mdi:pump"
     device_class: running
     entity_category: diagnostic
+    restore_value: true
     filters:
       - delayed_on_off: 1s    # debounce: only publish if state holds for 1 second to remove the duplicate BLE responses
 
@@ -437,6 +453,7 @@ binary_sensor:
     icon: "mdi:fan"
     device_class: running
     entity_category: diagnostic
+    restore_value: true
     filters:
       - delayed_on_off: 1s    # debounce: only publish if state holds for 1 second to remove the duplicate BLE responses
 
@@ -446,6 +463,7 @@ binary_sensor:
     icon: "mdi:valve"
     device_class: opening
     entity_category: diagnostic
+    restore_value: true
     filters:
       - delayed_on_off: 1s    # debounce: only publish if state holds for 1 second to remove the duplicate BLE responses
 
@@ -455,6 +473,7 @@ binary_sensor:
     icon: "mdi:alert"
     device_class: problem
     entity_category: diagnostic
+    restore_value: true
 
   # ─── Temperature sensor fault indicators (P-codes) ─────────────────────────
   # Triggered when temperature register reads heat-pump's "sensor failure"
@@ -466,6 +485,7 @@ binary_sensor:
     name: "Inlet Temp Sensor Fault (P01)"
     device_class: problem
     entity_category: diagnostic
+    restore_value: true
     on_state:
       then:
         - component.update: error_description
@@ -483,6 +503,7 @@ binary_sensor:
     name: "Outlet Temp Sensor Fault (P02)"
     device_class: problem
     entity_category: diagnostic
+    restore_value: true
     on_state:
       then:
         - component.update: error_description
@@ -500,6 +521,7 @@ binary_sensor:
     name: "Ambient Temp Sensor Fault (P04)"
     device_class: problem
     entity_category: diagnostic
+    restore_value: true
     on_state:
       then:
         - component.update: error_description
@@ -517,6 +539,7 @@ binary_sensor:
     name: "Coil Temp Sensor Fault (P05)"
     device_class: problem
     entity_category: diagnostic
+    restore_value: true
     on_state:
       then:
         - component.update: error_description
@@ -534,6 +557,7 @@ binary_sensor:
     name: "Exhaust Temp Sensor Fault (P81)"
     device_class: problem
     entity_category: diagnostic
+    restore_value: true
     on_state:
       then:
         - component.update: error_description
@@ -558,6 +582,7 @@ binary_sensor:
     icon: "mdi:engine"
     device_class: running
     entity_category: diagnostic
+    restore_value: true
 
 # ─── Sensors ────────────────────────────────────────────────────────────────
 sensor:
@@ -713,6 +738,8 @@ sensor:
           default: mode_str = "Unknown"; break;
         }
         id(current_mode).publish_state(std::string(mode_str));
+        strncpy(id(current_mode_str), mode_str, sizeof(id(current_mode_str)) - 1);
+        id(current_mode_str)[sizeof(id(current_mode_str)) - 1] = '\0';
 
         // H06 Mode type at reg 22 (0x03FF): 1=Heat pump, 2=Heat only (4-way valve)
         int16_t mt = rd(22);
@@ -792,6 +819,7 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    restore_value: true
     filters:
       - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
 
@@ -802,6 +830,7 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    restore_value: true
     filters:
       - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
 
@@ -812,6 +841,7 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    restore_value: true
     filters:
       - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
 
@@ -822,6 +852,7 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    restore_value: true
     filters:
       - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
 
@@ -832,6 +863,7 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    restore_value: true
     filters:
       - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
 
@@ -848,6 +880,7 @@ sensor:
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
+    restore_value: true
     filters:
       - delta: 0.05   # only publish if value moved more than 0.05°C to remove the duplicate BLE responses
 
@@ -865,6 +898,7 @@ sensor:
     accuracy_decimals: 0
     # Set from the BLE notify parser, never independently polled
     update_interval: never
+    restore_value: true
     # When the raw code changes, push a translated description and the
     # has-error binary state
     on_value:
@@ -888,6 +922,7 @@ sensor:
     state_class: measurement
     accuracy_decimals: 1
     entity_category: diagnostic
+    restore_value: true
     filters:
       - delta: 0.05
 
@@ -899,6 +934,7 @@ sensor:
     state_class: measurement
     accuracy_decimals: 1
     entity_category: diagnostic
+    restore_value: true
     filters:
       - delta: 0.05
 
@@ -910,6 +946,7 @@ sensor:
     state_class: measurement
     accuracy_decimals: 1
     entity_category: diagnostic
+    restore_value: true
     filters:
       - delta: 0.05
 
@@ -920,6 +957,7 @@ sensor:
     device_class: temperature
     accuracy_decimals: 1
     entity_category: diagnostic
+    restore_value: true
 
   - platform: template
     id: max_heat_temp
@@ -928,6 +966,7 @@ sensor:
     device_class: temperature
     accuracy_decimals: 1
     entity_category: diagnostic
+    restore_value: true
 
   - platform: template
     id: min_cool_temp
@@ -936,6 +975,7 @@ sensor:
     device_class: temperature
     accuracy_decimals: 1
     entity_category: diagnostic
+    restore_value: true
 
   - platform: template
     id: max_cool_temp
@@ -944,6 +984,7 @@ sensor:
     device_class: temperature
     accuracy_decimals: 1
     entity_category: diagnostic
+    restore_value: true
 
   # ── Battery Voltage ───────────────────────────────────────────────────────
   # The Firebeetle 2 ESP32-C6 has an onboard 1:1 voltage divider on GPIO0.

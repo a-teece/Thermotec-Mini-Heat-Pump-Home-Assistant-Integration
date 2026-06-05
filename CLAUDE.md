@@ -129,6 +129,21 @@ reason to revisit, and update this section if they change.
    to force the value to flash before sleeping (≈1 small flash write per wake;
    NVS wear-levels this — not a practical lifetime concern on esp-idf).
 
+9. **BLE-derived sensors use `restore_value: true` to eliminate `unknown` on
+   reconnect.** Without it, all template sensors (temperatures, power state,
+   outputs, fault flags, error code, setpoints) have no state on boot and HA
+   records `unknown` during the ~30–40 s window between API connect and the
+   first BLE notification arriving. With `restore_value: true`, ESPHome writes
+   each published value to NVS and re-publishes it on the next boot before any
+   BLE data arrives — so HA transitions directly from `unavailable` to the
+   last known value, then to the freshly-polled value (or stays put if the
+   reading is the same, which the `delta: 0.05` filter suppresses as a
+   no-op). The `global_preferences->sync()` call before deep sleep ensures
+   these NVS writes are committed even within the brief wake window.
+   `current_mode` is a text sensor (which ESPHome doesn't support
+   `restore_value` for) so it uses the same `char[8]` retained global +
+   Phase 0 republish pattern as `last_connected_str`.
+
 ## Home Assistant setup
 
 The device depends on four HA helpers (created under Settings → Devices &
