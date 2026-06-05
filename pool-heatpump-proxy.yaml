@@ -112,6 +112,153 @@ globals:
     type: char[24]
     restore_value: yes
 
+  # ── Sensor state snapshot, RETAINED across deep sleep ─────────────────────
+  # ESPHome's template sensor/binary_sensor/text_sensor platforms do NOT
+  # support restore_value, so the only way to carry a BLE-derived reading
+  # across a deep-sleep reboot is to mirror it in a restored global.
+  #
+  # The whole set is snapshotted in one place — enter_deep_sleep_scheduled,
+  # the single chokepoint before every sleep — by reading each sensor's
+  # current .state, then flushed to flash by global_preferences->sync().
+  # on_boot Phase 0 republishes them synchronously before the API connects,
+  # so HA transitions unavailable → last-known-value with no 'unknown' in
+  # between (the first BLE poll then updates them ~30 s later, or the
+  # delta/delayed_on_off filters suppress it as a no-op if unchanged).
+  #
+  # snapshot_valid gates the republish: it's false on the first-ever boot
+  # (nothing captured yet) and set true the first time we snapshot.
+  - id: snapshot_valid
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+
+  # Floats default to NAN so a sensor that was never populated republishes as
+  # 'unavailable' rather than a bogus 0.0.
+  - id: g_inlet_temp
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_outlet_temp
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_coil_temp
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_ambient_temp
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_exhaust_temp
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_target_temp
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_heating_set
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_cooling_set
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_auto_set
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_min_heat
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_max_heat
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_min_cool
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+  - id: g_max_cool
+    type: float
+    initial_value: 'NAN'
+    restore_value: yes
+
+  - id: g_power
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_unit_running
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_out_compressor
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_out_pump
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_out_fan
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_out_valve
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_f_inlet
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_f_outlet
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_f_ambient
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_f_coil
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: g_f_exhaust
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+
+  - id: g_error_code
+    type: int
+    initial_value: '0'
+    restore_value: yes
+
+  # Text-sensor mirrors. char[] (trivially copyable) so they can be restored;
+  # std::string globals can't. Sized to the longest value each can hold.
+  # Last known operating mode ("Heat", "Cool", "Auto").
+  - id: current_mode_str
+    type: char[8]
+    restore_value: yes
+  - id: g_defrost
+    type: char[12]
+    restore_value: yes
+  - id: g_heater_type
+    type: char[28]
+    restore_value: yes
+  - id: g_pump_mode
+    type: char[12]
+    restore_value: yes
+  - id: g_master_ver
+    type: char[12]
+    restore_value: yes
+  - id: g_soft_code
+    type: char[12]
+    restore_value: yes
+
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
@@ -120,18 +267,66 @@ esphome:
     # Priority -100 places us late in the boot sequence.
     priority: -100.0
     then:
-      # ── Phase 0: Republish the retained heartbeat BEFORE the API connects ─
+      # ── Phase 0: Republish retained values BEFORE the API connects ────────
       # Runs synchronously at the very start of on_boot — before the
-      # wait_until below yields to the loop that services API clients — so the
-      # value is already set when HA subscribes to states. HA therefore sees
-      # the previous timestamp immediately on reconnect and never records an
-      # 'unknown' for this entity. on_time_sync refreshes it to the new wake
-      # time a few seconds later. Skipped on the first-ever boot (empty global).
+      # wait_until below yields to the loop that services API clients — so
+      # values are already set when HA subscribes to states. HA therefore sees
+      # the previous values immediately on reconnect and never records an
+      # 'unknown'. The first BLE poll a few seconds later overwrites them with
+      # fresh data (or the delta/delayed_on_off filters suppress it as a no-op
+      # if unchanged). All values come from globals snapshotted before the last
+      # sleep (see enter_deep_sleep_scheduled).
       - if:
           condition:
             lambda: 'return id(last_connected_str)[0] != ''\0'';'
           then:
             - component.update: last_connected
+      - if:
+          condition:
+            lambda: 'return id(snapshot_valid);'
+          then:
+            - lambda: |-
+                // Numeric sensors. NAN republishes as 'unavailable' (cleaner
+                // than 'unknown'); the delta filter passes the first value.
+                id(inlet_temp).publish_state(id(g_inlet_temp));
+                id(outlet_temp).publish_state(id(g_outlet_temp));
+                id(coil_temp).publish_state(id(g_coil_temp));
+                id(ambient_temp).publish_state(id(g_ambient_temp));
+                id(exhaust_temp).publish_state(id(g_exhaust_temp));
+                id(current_target_temp).publish_state(id(g_target_temp));
+                id(heating_set_temp).publish_state(id(g_heating_set));
+                id(cooling_set_temp).publish_state(id(g_cooling_set));
+                id(auto_set_temp).publish_state(id(g_auto_set));
+                id(min_heat_temp).publish_state(id(g_min_heat));
+                id(max_heat_temp).publish_state(id(g_max_heat));
+                id(min_cool_temp).publish_state(id(g_min_cool));
+                id(max_cool_temp).publish_state(id(g_max_cool));
+
+                // Binary sensors.
+                id(current_power_state).publish_state(id(g_power));
+                id(unit_running).publish_state(id(g_unit_running));
+                id(output_compressor).publish_state(id(g_out_compressor));
+                id(output_circulate_pump).publish_state(id(g_out_pump));
+                id(output_high_fan).publish_state(id(g_out_fan));
+                id(output_4way_valve).publish_state(id(g_out_valve));
+
+                // error_code first so the fault sensors' has_error recompute
+                // (which reads error_code) sees it; error_code's own on_value
+                // also refreshes error_description.
+                id(error_code).publish_state(id(g_error_code));
+                id(inlet_temp_fault).publish_state(id(g_f_inlet));
+                id(outlet_temp_fault).publish_state(id(g_f_outlet));
+                id(ambient_temp_fault).publish_state(id(g_f_ambient));
+                id(coil_temp_fault).publish_state(id(g_f_coil));
+                id(exhaust_temp_fault).publish_state(id(g_f_exhaust));
+
+                // Text sensors — publish only if we have a stored value.
+                if (id(current_mode_str)[0]) id(current_mode).publish_state(std::string(id(current_mode_str)));
+                if (id(g_defrost)[0])     id(defrost_type).publish_state(std::string(id(g_defrost)));
+                if (id(g_heater_type)[0]) id(heater_mode_type).publish_state(std::string(id(g_heater_type)));
+                if (id(g_pump_mode)[0])   id(pump_mode).publish_state(std::string(id(g_pump_mode)));
+                if (id(g_master_ver)[0])  id(master_program_version).publish_state(std::string(id(g_master_ver)));
+                if (id(g_soft_code)[0])   id(main_control_software_code).publish_state(std::string(id(g_soft_code)));
 
       # ── Phase 1: Wait for the HA API ────────────────────────────────────
       # We need the API to read the prevent-sleep helper and the desired
@@ -1458,10 +1653,62 @@ script:
   # Falls back to deep_sleep_duration_night if HA time has not yet synced.
   - id: enter_deep_sleep_scheduled
     then:
-      # Force any pending preferences (notably last_connected_str) to flash
-      # now. ESPHome's periodic flush interval is far longer than a wake
-      # cycle, so without this explicit sync the retained timestamp written
-      # this wake would not survive the imminent deep sleep.
+      # Snapshot every BLE-derived sensor's current state into the retained
+      # globals so the next wake can republish them in on_boot Phase 0 before
+      # any BLE data arrives — eliminating the 'unknown' HA otherwise records
+      # in the ~30 s gap between API connect and the first poll. This is the
+      # single chokepoint before every deep sleep (called from on_boot and the
+      # prevent-deep-sleep off handler), so it's the right place to capture.
+      # Guarded on has_state() so we never persist garbage for a sensor that
+      # was never populated; floats left at their NAN initial value republish
+      # as 'unavailable'.
+      - lambda: |-
+          if (id(inlet_temp).has_state())            id(g_inlet_temp)    = id(inlet_temp).state;
+          if (id(outlet_temp).has_state())           id(g_outlet_temp)   = id(outlet_temp).state;
+          if (id(coil_temp).has_state())             id(g_coil_temp)     = id(coil_temp).state;
+          if (id(ambient_temp).has_state())          id(g_ambient_temp)  = id(ambient_temp).state;
+          if (id(exhaust_temp).has_state())          id(g_exhaust_temp)  = id(exhaust_temp).state;
+          if (id(current_target_temp).has_state())   id(g_target_temp)   = id(current_target_temp).state;
+          if (id(heating_set_temp).has_state())      id(g_heating_set)   = id(heating_set_temp).state;
+          if (id(cooling_set_temp).has_state())      id(g_cooling_set)   = id(cooling_set_temp).state;
+          if (id(auto_set_temp).has_state())         id(g_auto_set)      = id(auto_set_temp).state;
+          if (id(min_heat_temp).has_state())         id(g_min_heat)      = id(min_heat_temp).state;
+          if (id(max_heat_temp).has_state())         id(g_max_heat)      = id(max_heat_temp).state;
+          if (id(min_cool_temp).has_state())         id(g_min_cool)      = id(min_cool_temp).state;
+          if (id(max_cool_temp).has_state())         id(g_max_cool)      = id(max_cool_temp).state;
+
+          if (id(current_power_state).has_state())   id(g_power)         = id(current_power_state).state;
+          if (id(unit_running).has_state())          id(g_unit_running)  = id(unit_running).state;
+          if (id(output_compressor).has_state())     id(g_out_compressor)= id(output_compressor).state;
+          if (id(output_circulate_pump).has_state()) id(g_out_pump)      = id(output_circulate_pump).state;
+          if (id(output_high_fan).has_state())       id(g_out_fan)       = id(output_high_fan).state;
+          if (id(output_4way_valve).has_state())     id(g_out_valve)     = id(output_4way_valve).state;
+          if (id(inlet_temp_fault).has_state())      id(g_f_inlet)       = id(inlet_temp_fault).state;
+          if (id(outlet_temp_fault).has_state())     id(g_f_outlet)      = id(outlet_temp_fault).state;
+          if (id(ambient_temp_fault).has_state())    id(g_f_ambient)     = id(ambient_temp_fault).state;
+          if (id(coil_temp_fault).has_state())       id(g_f_coil)        = id(coil_temp_fault).state;
+          if (id(exhaust_temp_fault).has_state())    id(g_f_exhaust)     = id(exhaust_temp_fault).state;
+
+          if (id(error_code).has_state())            id(g_error_code)    = (int)id(error_code).state;
+
+          auto save_str = [](esphome::text_sensor::TextSensor *s, char *dst, size_t n) {
+            if (!s->has_state()) return;
+            strncpy(dst, s->state.c_str(), n - 1);
+            dst[n - 1] = '\0';
+          };
+          save_str(id(current_mode),              id(current_mode_str), sizeof(id(current_mode_str)));
+          save_str(id(defrost_type),              id(g_defrost),        sizeof(id(g_defrost)));
+          save_str(id(heater_mode_type),          id(g_heater_type),    sizeof(id(g_heater_type)));
+          save_str(id(pump_mode),                 id(g_pump_mode),      sizeof(id(g_pump_mode)));
+          save_str(id(master_program_version),    id(g_master_ver),     sizeof(id(g_master_ver)));
+          save_str(id(main_control_software_code),id(g_soft_code),      sizeof(id(g_soft_code)));
+
+          id(snapshot_valid) = true;
+
+      # Force any pending preferences (the snapshot above, plus
+      # last_connected_str) to flash now. ESPHome's periodic flush interval is
+      # far longer than a wake cycle, so without this explicit sync the values
+      # written this wake would not survive the imminent deep sleep.
       - lambda: 'global_preferences->sync();'
       - if:
           condition:

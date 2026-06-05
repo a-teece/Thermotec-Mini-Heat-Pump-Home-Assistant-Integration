@@ -129,6 +129,33 @@ reason to revisit, and update this section if they change.
    to force the value to flash before sleeping (≈1 small flash write per wake;
    NVS wear-levels this — not a practical lifetime concern on esp-idf).
 
+9. **BLE-derived sensors are snapshotted into retained globals to eliminate
+   `unknown` on reconnect.** Without this, all template sensors (temperatures,
+   power state, outputs, fault flags, error code, setpoints, mode, diagnostics)
+   have no state on boot and HA records `unknown` during the ~30–40 s window
+   between API connect and the first BLE notification arriving. **Note:**
+   ESPHome's `template` sensor / binary_sensor / text_sensor platforms do
+   **not** support a `restore_value` option (verified against the ESPHome
+   source — only `globals`, and some other platforms, do), so the retained
+   value has to be carried in a restored global, the same pattern already used
+   for `last_connected_str`. The mechanism:
+   - Each BLE-derived sensor has a matching `restore_value: yes` global
+     (`g_*`); floats default to `NAN` so a never-seen sensor republishes as
+     *unavailable* rather than a bogus `0.0`.
+   - `enter_deep_sleep_scheduled` — the single chokepoint before every sleep
+     (reached from both `on_boot` and the prevent-sleep-off handler) —
+     snapshots each sensor's current `.state` into its global (guarded on
+     `has_state()`), sets the `snapshot_valid` gate, then calls
+     `global_preferences->sync()` to force all of it to flash before sleeping.
+   - `on_boot` Phase 0 republishes the globals (gated on `snapshot_valid`)
+     synchronously, before the API-connect wait — so HA transitions
+     `unavailable → last-known-value` with no `unknown`. The first poll ~30 s
+     later overwrites them, or the `delta: 0.05` / `delayed_on_off: 1s` filters
+     suppress it as a no-op if unchanged. `error_code` is republished *before*
+     the fault flags so the `has_error` recompute (which reads `error_code`)
+     sees it. Text sensors use `char[]` globals (same `current_mode_str`
+     pattern); they're published only when the stored value is non-empty.
+
 ## Home Assistant setup
 
 The device depends on four HA helpers (created under Settings → Devices &
