@@ -145,8 +145,20 @@ reason to revisit, and update this section if they change.
    - `enter_deep_sleep_scheduled` — the single chokepoint before every sleep
      (reached from both `on_boot` and the prevent-sleep-off handler) —
      snapshots each sensor's current `.state` into its global (guarded on
-     `has_state()`), sets the `snapshot_valid` gate, then calls
-     `global_preferences->sync()` to force all of it to flash before sleeping.
+     `has_state()`), sets the `snapshot_valid` gate, **waits ~1.2 s**, then
+     calls `global_preferences->sync()` to force all of it to flash before
+     sleeping. The wait is load-bearing, not cosmetic: a `restore_value`
+     global is a `PollingComponent` that only stages its value to its
+     preference buffer from its `update()` (every 1 s) or `on_shutdown` —
+     **never on assignment**. Snapshotting and then `sync()`-ing in the next
+     action commits the *stale* buffers (the assignments haven't been staged
+     by any poll yet) and `deep_sleep.enter` sleeps before the next poll runs,
+     so the fresh values are lost every cycle. This was the regression that
+     made every BLE sensor read `unknown` each wake (`snapshot_valid` restored
+     `false`, so Phase 0 skipped the republish) while `Last Connected` worked —
+     `last_connected_str` is set back in `on_time_sync`, seconds before sleep,
+     so its poll had already staged it. The delay must exceed the 1 s poll
+     interval so every global's `update()` fires at least once first.
    - `on_boot` Phase 0 republishes the globals (gated on `snapshot_valid`)
      synchronously, before the API-connect wait — so HA transitions
      `unavailable → last-known-value` with no `unknown`. The first poll ~30 s
