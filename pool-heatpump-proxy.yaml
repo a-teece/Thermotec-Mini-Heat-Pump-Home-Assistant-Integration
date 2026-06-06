@@ -1705,9 +1705,28 @@ script:
 
           id(snapshot_valid) = true;
 
-      # Force any pending preferences (the snapshot above, plus
-      # last_connected_str) to flash now. ESPHome's periodic flush interval is
-      # far longer than a wake cycle, so without this explicit sync the values
+      # Let the globals' own 1 s poll stage the values we just set into their
+      # preference buffers BEFORE we sync to flash below. This delay is the
+      # crux of the fix: a restore_value global does NOT write itself when you
+      # assign it. RestoringGlobalsComponent is a PollingComponent — it only
+      # stages its value (rtc_.save) from update(), which fires every 1 s, or
+      # from on_shutdown. The assignments above merely change the in-RAM value;
+      # nothing is staged yet. Without this pause the global_preferences->sync()
+      # that follows runs in the very next action (no main-loop iteration in
+      # between, so no poll has run) and therefore commits the *stale* buffers —
+      # snapshot_valid=false, floats NAN, strings empty — and deep_sleep.enter
+      # then sleeps before the next poll could stage the fresh values, losing
+      # them every cycle. That is why every BLE-derived sensor read 'unknown'
+      # each wake (snapshot_valid restored false → Phase 0 skipped the
+      # republish) while Last Connected worked: last_connected_str is set back
+      # in on_time_sync, seconds before sleep, so its poll had already staged it
+      # by the time sync ran. A delay > the 1 s poll interval guarantees every
+      # global's update() fires at least once and stages the new value.
+      - delay: 1200ms
+
+      # Force the now-staged preferences (the snapshot above, plus
+      # last_connected_str) to flash. ESPHome's periodic flush interval is far
+      # longer than a wake cycle, so without this explicit sync the values
       # written this wake would not survive the imminent deep sleep.
       - lambda: 'global_preferences->sync();'
       - if:
