@@ -65,6 +65,28 @@ substitutions:
   day_start_hour: "9"
   day_end_hour: "18"
 
+  # ─── Hardware / board ───────────────────────────────────────────────────────
+  # These default to the DFRobot FireBeetle 2 ESP32-C6 (the reference board).
+  # When consuming this file as a remote ESPHome package, override any of these
+  # in your own device YAML to target a different ESP32 board — no need to fork.
+
+  # ESPHome board identifier and chip variant for the esp32: component.
+  # e.g. esp32dev / ESP32, esp32-s3-devkitc-1 / ESP32S3.
+  esp_board: dfrobot_firebeetle2_esp32c6
+  esp_variant: ESP32C6
+
+  # Battery monitoring (FireBeetle 2 specifics).
+  # battery_adc_pin: the ADC pin wired to the battery sense line. The
+  #   FireBeetle 2 exposes the cell voltage (via a divider) on GPIO0. Set to a
+  #   valid ADC pin for your board.
+  # battery_voltage_multiplier: compensates for the onboard voltage divider.
+  #   The FireBeetle 2 has a 1:1 divider, so 2.0 restores the true cell
+  #   voltage. Use your board's divider ratio, or "1.0" if it has no divider.
+  # To disable battery monitoring entirely on a board without a battery, see
+  # the README ("Using a different ESP32 board").
+  battery_adc_pin: GPIO0
+  battery_voltage_multiplier: "2.0"
+
 # ─── Globals ────────────────────────────────────────────────────────────────
 globals:
   # Tracks whether the BLE link to the heat pump is up.
@@ -395,8 +417,8 @@ esphome:
             - script.execute: enter_deep_sleep_scheduled
 
 esp32:
-  board: dfrobot_firebeetle2_esp32c6
-  variant: ESP32C6
+  board: ${esp_board}
+  variant: ${esp_variant}
   framework:
     type: esp-idf
     version: recommended
@@ -1142,16 +1164,18 @@ sensor:
 
   # ── Battery Voltage ───────────────────────────────────────────────────────
   # The Firebeetle 2 ESP32-C6 has an onboard 1:1 voltage divider on GPIO0.
-  # 12dB attenuation gives the ADC a ~3.1V max range; the multiply: 2.0
-  # filter restores the actual cell voltage (LiPo 3.0–4.2V).
+  # 12dB attenuation gives the ADC a ~3.1V max range; the multiply filter
+  # restores the actual cell voltage (LiPo 3.0–4.2V). The pin and multiplier
+  # are substitutions (battery_adc_pin / battery_voltage_multiplier) so this
+  # works on other boards — see the substitutions block at the top.
   - platform: adc
-    pin: GPIO0
+    pin: ${battery_adc_pin}
     name: "Battery Voltage"
     id: battery_voltage
     update_interval: 5min
     attenuation: 12db
     filters:
-      - multiply: 2.0
+      - multiply: ${battery_voltage_multiplier}
       # Smooth ADC noise across 3 readings, publish every time so the
       # brief wake window always gets a value out before sleep.
       - sliding_window_moving_average:

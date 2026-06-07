@@ -23,7 +23,17 @@ new protocol facts are discovered.
 ## Repository layout
 
 - `pool-heatpump-proxy.yaml` — the ESPHome device configuration. This is
-  the primary artifact. Everything the device does lives here.
+  the primary artifact. Everything the device does lives here. It is also
+  **consumed by others as a remote ESPHome package** (see "Distribution &
+  releases" below), so treat it as a published interface: the
+  `substitutions:` block at the top is the documented override surface, and
+  renaming/removing a substitution is a breaking change.
+- `example-device.yaml` — the minimal device file a *consumer* puts on their
+  own ESPHome dashboard. It pulls `pool-heatpump-proxy.yaml` from GitHub via
+  `packages:` and overrides substitutions/secrets locally. Keep its commented
+  override list in sync with the substitutions block in the main YAML.
+- `CHANGELOG.md` — user-facing change log (Keep a Changelog format). Update
+  the `[Unreleased]` section as part of any change that affects users.
 - `PROTOCOL.md` — comprehensive BLE/Modbus protocol reference.
 - `LICENSE` — GNU GPL v3.
 - `CLAUDE.md` — this file.
@@ -35,7 +45,10 @@ new protocol facts are discovered.
 - **Power:** LiPo cell (3.0–4.2 V). The board has a 1:1 voltage divider on
   GPIO0; battery voltage is read via ADC with a `multiply: 2.0` filter.
   Expected battery life is roughly a week to ten days on the 5-minute deep
-  sleep cycle.
+  sleep cycle. The board (`esp_board`/`esp_variant`) and battery wiring
+  (`battery_adc_pin`/`battery_voltage_multiplier`) are **substitutions** so
+  the firmware can target other ESP32 boards without a fork; the defaults are
+  the FireBeetle 2 values above.
 - **Heat pump:** Thermotec (PHNIX OEM). BLE module is BlueNRG-based,
   advertised as `BLUENRG-XXXXXX`. Firmware on the reference unit: Master
   program version `1.2`, Main control software code `494`.
@@ -204,6 +217,43 @@ available for UI-created template helpers but not for YAML-defined ones.
 - **Gotcha:** a sensor that has a `name:` but doesn't appear in HA usually
   means the firmware didn't actually flash, or the entity is in the
   collapsed Diagnostic section / disabled. Check the build succeeded first.
+
+## Distribution & releases
+
+The firmware is published for others to consume as a **remote ESPHome
+package** — they reference `pool-heatpump-proxy.yaml` from GitHub via
+`packages:` (see `example-device.yaml`) rather than copying it. Consequences
+to keep in mind when editing:
+
+- **The substitutions block is a public API.** Renaming or removing a
+  substitution breaks every downstream device file. Add new substitutions
+  with sensible defaults instead, and mirror them into `example-device.yaml`'s
+  commented override list and the README.
+- **`!secret` resolves on the consumer's machine**, not from GitHub — never
+  commit a `secrets.yaml`, and keep the required-secrets list in the YAML
+  header, README, and this file consistent.
+
+**Release model (decided with the maintainer):**
+
+- **`main` is always stable.** It is what most users track (`ref: main`).
+  Don't merge half-finished work into it.
+- **Feature branches are the dev channel.** Testers point a package at a
+  branch name to get in-development code before it lands on `main`.
+- **Tags (`vX.Y.Z`) are immutable stable snapshots** of `main`, for users who
+  want to pin. Semantic versioning: MAJOR = a user must act (renamed
+  substitution, new required secret/helper), MINOR = backwards-compatible
+  feature, PATCH = backwards-compatible fix.
+
+**Cutting a release** (maintainer, after a change is merged to `main`):
+
+1. Move the `[Unreleased]` notes in `CHANGELOG.md` under a new `## [vX.Y.Z]`
+   heading with the date; commit to `main`.
+2. Tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
+3. Create a GitHub Release from the tag (paste the changelog section) so it
+   shows on the Releases page that the README links to.
+
+No tags exist yet; the first one should be `v1.0.0` cut from `main` once this
+package work merges.
 
 ## Testing faults safely
 

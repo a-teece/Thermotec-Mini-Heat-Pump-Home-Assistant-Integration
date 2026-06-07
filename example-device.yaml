@@ -1,0 +1,66 @@
+# =============================================================================
+# Example device configuration — Thermotec / PHNIX Pool Heat Pump proxy
+# =============================================================================
+#
+# This is the ONLY file you need to create on your own ESPHome dashboard.
+# It pulls the full firmware from GitHub as a remote "package", so you never
+# have to copy/paste the main YAML — and you get fixes and new features just
+# by recompiling.
+#
+# HOW TO USE
+#   1. Copy this file into your ESPHome config directory (or paste it into the
+#      ESPHome dashboard "New device" editor) and rename it to something like
+#      `pool-heatpump.yaml`.
+#   2. Add the required entries to your `secrets.yaml` (see the README §
+#      "Configure secrets.yaml").
+#   3. Override any substitutions below to match your setup.
+#   4. Compile and flash.
+#
+# CHOOSING A VERSION (the `ref:` field in the package below)
+#   - `main`            → the latest STABLE release. Recommended for most users.
+#   - `vX.Y.Z`          → a specific stable release, pinned. Use this if you
+#                         want full control over when you take updates (it will
+#                         never change under you). See the repo's Releases page.
+#   - a feature branch  → the latest IN-DEVELOPMENT code (e.g. testing a fix
+#     name                before it's merged). Expect rough edges.
+#
+# After changing `ref:`, recompile. ESPHome re-fetches per the `refresh:`
+# interval below; run `esphome clean` (or the dashboard "Clean Build Files")
+# to force an immediate re-pull.
+# =============================================================================
+
+substitutions:
+  # ── Identity ────────────────────────────────────────────────────────────
+  # Lower-case, hyphenated. Becomes the ESPHome node/hostname.
+  device_name: pool-heatpump-proxy
+  friendly_name: Pool Heatpump Proxy
+
+  # ── Home Assistant helper entity IDs ──────────────────────────────────────
+  # Only override these if you created your HA helpers with different IDs.
+  # See the README § "Create Home Assistant helpers".
+  # home_assistant_prevent_deep_sleep_switch_name: input_boolean.pool_heater_prevent_deep_sleep
+  # home_assistant_desired_power_state_switch_name: input_boolean.pool_heater_power
+  # home_assistant_desired_target_temp_number_name: input_number.pool_target_temperature
+  # home_assistant_desired_mode_select_name: input_select.pool_heater_mode
+
+  # ── Sleep schedule (optional) ─────────────────────────────────────────────
+  # deep_sleep_duration_day: 5min
+  # deep_sleep_duration_night: 15min
+  # day_start_hour: "9"
+  # day_end_hour: "18"
+
+  # ── Hardware / board (optional) ───────────────────────────────────────────
+  # Defaults target the DFRobot FireBeetle 2 ESP32-C6. Override for a
+  # different ESP32 board. See the README § "Using a different ESP32 board".
+  # esp_board: dfrobot_firebeetle2_esp32c6
+  # esp_variant: ESP32C6
+  # battery_adc_pin: GPIO0
+  # battery_voltage_multiplier: "2.0"   # 1.0 if your board has no divider
+
+# ── Remote package: the actual firmware, pulled from GitHub ─────────────────
+packages:
+  thermotec_heatpump:
+    url: https://github.com/a-teece/thermotec-mini-heat-pump-home-assistant-integration
+    ref: main                       # see "CHOOSING A VERSION" above
+    files: [pool-heatpump-proxy.yaml]
+    refresh: 1d                      # how often to re-check GitHub for updates
