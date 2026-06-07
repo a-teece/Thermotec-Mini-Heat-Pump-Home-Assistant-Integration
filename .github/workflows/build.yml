@@ -1,0 +1,48 @@
+name: ESPHome build
+
+# CI: compile the ESPHome firmware to validate the config and lambdas.
+# Full `esphome compile` of the device config on every change. This type-checks
+# the ~50 inline C++ lambdas (parsing, CRC, frame building, the deep-sleep
+# snapshot logic) that nothing otherwise validates until the firmware is flashed
+# to hardware. A green build here means the YAML schema is valid *and* the
+# generated C++ compiles for the real target board.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pool-heatpump-proxy.yaml"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "pool-heatpump-proxy.yaml"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Compile firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The config pulls every credential from secrets.yaml via !secret, so a
+      # compile needs the file present. These are throwaway CI values, never the
+      # real device secrets — the build only needs them to be well-formed:
+      #   * the API encryption key must be base64-encoded 32 bytes
+      #   * the device MAC must be a valid XX:XX:XX:XX:XX:XX address
+      #   * the AP fallback password must be at least 8 characters
+      - name: Generate throwaway secrets.yaml
+        run: |
+          cat > secrets.yaml <<EOF
+          wifi_ssid: "ci-ssid"
+          wifi_password: "ci-wifi-password"
+          ap_fallback_password: "ci-fallback-password"
+          ota_password: "ci-ota-password"
+          pool_heatpump_proxy_api_key: "$(openssl rand -base64 32)"
+          pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
+          EOF
+
+      - name: esphome compile
+        uses: esphome/build-action@v6
+        with:
+          yaml-file: pool-heatpump-proxy.yaml
