@@ -1,5 +1,6 @@
 name: ESPHome build
 
+# CI: compile the ESPHome firmware to validate the config and lambdas.
 # Full `esphome compile` of the device config on every change. This type-checks
 # the ~50 inline C++ lambdas (parsing, CRC, frame building, the deep-sleep
 # snapshot logic) that nothing otherwise validates until the firmware is flashed
