@@ -24,6 +24,8 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v1.0.0] - 2026-06-08
+
 ### Added
 - **Remote-package installation.** The firmware can now be consumed as an
   [ESPHome package](https://esphome.io/components/packages.html) straight from
