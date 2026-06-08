@@ -62,13 +62,25 @@ For battery-powered deployments, a 3.7 V LiPo cell (1000–2000 mAh is a reasona
 
 ### Using a different ESP32 board
 
-Any ESP32 board with BLE support and ESP-IDF framework compatibility should work. Three things need changing in `pool-heatpump-proxy.yaml`:
+Any ESP32 board with BLE support and ESP-IDF framework compatibility should work. The board and battery-monitoring specifics are exposed as **substitutions**, so you can retarget the firmware without editing the main YAML — just override them in your own device file (see [Installation](#installation)):
 
-1. **`board:`** in the `esp32:` block — change to your board's ESPHome identifier (e.g. `esp32dev`, `esp32-s3-devkitc-1`)
-2. **`variant:`** in the `esp32:` block — change to match your chip variant (e.g. `ESP32`, `ESP32S3`)
-3. **`pin: GPIO0`** on the `battery_voltage` ADC sensor — change to a valid ADC pin for your board, or remove the `battery_voltage` and `battery_level` sensors entirely if you are not monitoring battery voltage
+| Substitution | Default (FireBeetle 2) | What it sets |
+|--------------|------------------------|--------------|
+| `esp_board` | `dfrobot_firebeetle2_esp32c6` | The `board:` identifier in the `esp32:` block (e.g. `esp32dev`, `esp32-s3-devkitc-1`) |
+| `esp_variant` | `ESP32C6` | The `variant:` in the `esp32:` block (e.g. `ESP32`, `ESP32S3`) |
+| `battery_adc_pin` | `GPIO0` | The ADC pin wired to the battery sense line |
+| `battery_voltage_multiplier` | `"2.0"` | Compensates for the board's voltage divider |
 
-> The `multiply: 2.0` filter on the battery sensor assumes a 1:1 voltage divider, as found on the FireBeetle 2. If your board does not have this divider, the reading will be approximately half the actual cell voltage. Adjust the multiplier to match your board's divider ratio, or remove the sensor.
+```yaml
+# In your device YAML's substitutions: block
+substitutions:
+  esp_board: esp32-s3-devkitc-1
+  esp_variant: ESP32S3
+  battery_adc_pin: GPIO1
+  battery_voltage_multiplier: "1.0"
+```
+
+> The `battery_voltage_multiplier` default of `2.0` assumes a 1:1 voltage divider, as found on the FireBeetle 2. If your board does not have this divider, set it to `1.0`; for any other divider ratio, set it to match. If your board is not battery-powered at all, you can simply ignore the battery voltage and battery level entities (hide or disable them in Home Assistant).
 
 ---
 
@@ -80,9 +92,41 @@ Open the AquaTemp app, navigate to your device's settings or info screen, and lo
 
 If you cannot find the MAC address in the app, you can retrieve it from the ESPHome logs after flashing (see the note in step 4 below).
 
-### 2. Add the YAML to ESPHome
+### 2. Add the firmware to ESPHome
 
-Copy `pool-heatpump-proxy.yaml` into your ESPHome configuration directory, or paste its contents directly into the ESPHome dashboard editor.
+There are two ways to do this. **The remote-package method is recommended** — it means you never copy/paste the firmware, and you receive fixes and new features just by recompiling.
+
+#### Option A — Remote package (recommended)
+
+Instead of copying the ~1,800-line YAML, you create a tiny device file that pulls the firmware straight from this repo as an [ESPHome package](https://esphome.io/components/packages.html). Copy [`example-device.yaml`](./example-device.yaml) into your ESPHome config directory (or paste it into the dashboard's **New device** editor) and rename it, e.g. `pool-heatpump.yaml`:
+
+```yaml
+substitutions:
+  device_name: pool-heatpump-proxy
+  friendly_name: Pool Heatpump Proxy
+  # Override any other substitutions here (HA entity IDs, board, sleep
+  # schedule…). Anything you don't set uses the upstream default.
+
+packages:
+  thermotec_heatpump:
+    url: https://github.com/a-teece/thermotec-mini-heat-pump-home-assistant-integration
+    ref: main                       # latest stable — see "Versions" below
+    files: [pool-heatpump-proxy.yaml]
+    refresh: 1d
+```
+
+Your `secrets.yaml` (next step) is read from your own ESPHome install — secrets are **never** pulled from GitHub. See [`example-device.yaml`](./example-device.yaml) for the fully-commented version with every override listed.
+
+> **Versions.** The `ref:` field selects which version of the firmware you compile against:
+> - **`main`** — the latest **stable** release. Recommended for most users.
+> - **`vX.Y.Z`** — a specific stable release, pinned so it never changes under you. Browse the repo's [Releases](https://github.com/a-teece/thermotec-mini-heat-pump-home-assistant-integration/releases) page and copy a tag.
+> - **a feature branch name** — the latest **in-development** code (for testing a fix before it's released). Expect rough edges.
+>
+> ESPHome caches the fetched package and only re-checks GitHub every `refresh:` interval (`1d` above). To force an immediate re-pull after changing `ref:` or to grab the newest commit, run `esphome clean <your-file>.yaml` (or **Clean Build Files** in the dashboard) before recompiling.
+
+#### Option B — Copy the YAML manually
+
+If you prefer to vendor the firmware yourself (e.g. to make local edits), copy `pool-heatpump-proxy.yaml` into your ESPHome configuration directory, or paste its contents directly into the ESPHome dashboard editor. You will need to re-copy it to pick up upstream fixes.
 
 ### 3. Configure `secrets.yaml`
 
@@ -126,7 +170,7 @@ The device reads its desired power state, mode, and target temperature from four
 | Number | Pool Target Temperature | `input_number.pool_target_temperature` | Min: 15, Max: 40, Step: 0.5, Unit: °C |
 | Dropdown | Pool Heater Mode | `input_select.pool_heater_mode` | Options: Heat, Cool, Auto |
 
-If you use different entity IDs, update the matching `substitutions:` entries at the top of `pool-heatpump-proxy.yaml` to match.
+If you use different entity IDs, set the matching `substitutions:` entries — in your own device file if you used the remote-package method (Option A), or at the top of `pool-heatpump-proxy.yaml` if you copied it manually (Option B).
 
 ### 6. Create Home Assistant template wrapper entities
 
@@ -227,7 +271,7 @@ The sleep duration varies by time of day to balance responsiveness against batte
 | Day | 09:00 – 17:59 | 5 minutes | `deep_sleep_duration_day`, `day_start_hour`, `day_end_hour` |
 | Night | 18:00 – 08:59 | 15 minutes | `deep_sleep_duration_night` |
 
-All four values are set in the `substitutions:` block at the top of `pool-heatpump-proxy.yaml`. Hours use 24-hour whole-hour values (`"9"`, `"18"`, etc.). Durations accept ESPHome time strings (`5min`, `30s`, `1h`).
+All four values are `substitutions:` — set them in your own device file (remote-package method) or at the top of `pool-heatpump-proxy.yaml` (manual copy). Hours use 24-hour whole-hour values (`"9"`, `"18"`, etc.). Durations accept ESPHome time strings (`5min`, `30s`, `1h`).
 
 If HA time has not yet synced when the device is ready to sleep, it falls back to the night duration.
 
