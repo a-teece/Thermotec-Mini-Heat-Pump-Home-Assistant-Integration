@@ -1,21 +1,23 @@
 name: ESPHome build
 
 # CI: compile the ESPHome firmware to validate the config and lambdas.
-# Full `esphome compile` of the device config on every change. This type-checks
-# the ~50 inline C++ lambdas (parsing, CRC, frame building, the deep-sleep
-# snapshot logic) that nothing otherwise validates until the firmware is flashed
-# to hardware. A green build here means the YAML schema is valid *and* the
-# generated C++ compiles for the real target board.
+# Full `esphome compile` of the device config. This type-checks the ~50 inline
+# C++ lambdas (parsing, CRC, frame building, the deep-sleep snapshot logic)
+# that nothing otherwise validates until the firmware is flashed to hardware.
+# A green build here means the YAML schema is valid *and* the generated C++
+# compiles for the real target board.
+#
+# No `paths:` filter: this check is a required status check in branch
+# protection, and a required check that is *skipped* (e.g. a docs-only PR that
+# doesn't touch the YAML) leaves the PR stuck "Expected — waiting for status"
+# and unmergeable forever. Running on every PR and every push to main keeps the
+# required check honest — it always reports a real pass/fail. The compile is
+# the only meaningful validation in this single-config repo, so the occasional
+# run on a docs-only change is a cheap price for never deadlocking a merge.
 on:
   push:
     branches: [main]
-    paths:
-      - "pool-heatpump-proxy.yaml"
-      - ".github/workflows/build.yml"
   pull_request:
-    paths:
-      - "pool-heatpump-proxy.yaml"
-      - ".github/workflows/build.yml"
   workflow_dispatch:
 
 jobs:
