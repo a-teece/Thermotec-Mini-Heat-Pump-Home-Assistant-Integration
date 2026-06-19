@@ -32,6 +32,7 @@ add_executable(phnix_tests
   tests/test_crc.cpp
   tests/test_frame.cpp
   tests/test_decode.cpp
+  tests/test_golden.cpp
 )
 target_include_directories(phnix_tests PRIVATE tests)
 target_link_libraries(phnix_tests PRIVATE phnix)

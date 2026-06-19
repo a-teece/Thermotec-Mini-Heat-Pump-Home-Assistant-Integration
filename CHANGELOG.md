@@ -32,14 +32,18 @@ Version numbers follow Semantic Versioning:
   reused by a future native firmware. Pure codec (no BLE/ESPHome/Arduino
   dependency): CRC-16, command-frame builders (power, mode, target, read-all,
   generic write), and decoders (TEMP1 + fault sentinels, error bitmask, block
-  parsing, aggregated `HeatPumpState`). 25 unit tests assert byte-for-byte
-  against frames captured from the reference unit; added to CI as a separate
-  fast job. No change to the shipped firmware behaviour yet.
+  parsing, aggregated `HeatPumpState`). 31 unit tests assert byte-for-byte
+  against frames captured from the reference unit — including six **golden
+  block notifications captured live via shadow mode** — added to CI as a
+  separate fast job. No change to the shipped firmware behaviour yet.
 - **Shadow-mode verification harness** (dev branch only). Compiles `lib/phnix`
   into the firmware and cross-checks it against the existing parser/frame-builder
   lambdas on live hardware, logging any disagreement under the `phnix_shadow`
   tag. Observation only — no runtime behaviour change. See
   [`SHADOW.md`](./SHADOW.md). Removed at cutover, before any release to `main`.
+  **Validated on the reference unit:** every power/mode/target frame matched the
+  library byte-for-byte, all four block types decoded correctly (incl. an E03
+  fault and firmware identity 1.2/494), zero mismatches.
 
 ### Fixed
 - **`Protocol.md`**: corrected the Heat/Cool labels on the mode-change sample

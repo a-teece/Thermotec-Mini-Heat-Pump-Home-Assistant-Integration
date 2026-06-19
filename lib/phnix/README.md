@@ -59,7 +59,10 @@ ctest --test-dir build --output-on-failure
 
 Tests assert byte-for-byte against frames captured from the reference unit
 (see `tests/`), so a green run means the builders reproduce the exact bytes the
-AquaTemp app sends. The test harness (`tests/test_framework.h`) is
+AquaTemp app sends. `tests/test_golden.cpp` goes further: it pins six complete
+block notifications captured *live* from the heat pump (via shadow mode — see
+`../../SHADOW.md`), so the decoder is verified against the real wire format,
+not just synthesised frames. The test harness (`tests/test_framework.h`) is
 intentionally dependency-free; swap in GoogleTest/Catch2 later if wanted.
 
 ## License
