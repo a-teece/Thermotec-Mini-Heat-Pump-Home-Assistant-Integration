@@ -24,6 +24,18 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Added
+
+- **`lib/phnix` — a platform-agnostic, host-unit-tested protocol library.**
+  First step of extracting the heat-pump Modbus/BLE logic out of the ESPHome
+  YAML lambdas into real C++ that can be tested on a dev machine (TDD) and
+  reused by a future native firmware. Pure codec (no BLE/ESPHome/Arduino
+  dependency): CRC-16, command-frame builders (power, mode, target, read-all,
+  generic write), and decoders (TEMP1 + fault sentinels, error bitmask, block
+  parsing, aggregated `HeatPumpState`). 25 unit tests assert byte-for-byte
+  against frames captured from the reference unit; added to CI as a separate
+  fast job. No change to the shipped firmware behaviour yet.
+
 ### Fixed
 - **`Protocol.md`**: corrected the Heat/Cool labels on the mode-change sample
   frames in Appendix A. The byte sequences and CRCs were always correct; only
