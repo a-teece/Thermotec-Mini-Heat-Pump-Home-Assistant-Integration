@@ -11,12 +11,10 @@
 // clean against real hardware over many cycles, the lambdas can be cut over to
 // call the library directly and this file deleted.
 //
-// All logging uses the "phnix_shadow" tag, so verbosity can be tuned
-// independently, e.g. in the device YAML:
-//
-//   logger:
-//     logs:
-//       phnix_shadow: DEBUG   # matches are DEBUG, mismatches are WARN
+// All logging uses the "phnix_shadow" tag at INFO/WARN, so it shows at the
+// firmware's default log level with no override needed. (ESPHome forbids
+// setting a per-tag level more verbose than the global `level:`, so a DEBUG
+// tag would require global DEBUG — avoided here on purpose.)
 #pragma once
 
 #include <cstdint>
@@ -56,7 +54,7 @@ inline std::string fopt(const std::optional<float> &o) {
 inline bool check_frame(const char *what, const std::vector<uint8_t> &actual,
                         const std::vector<uint8_t> &expected) {
   if (actual == expected) {
-    ESP_LOGD(TAG, "frame[%s] MATCH (%u bytes)", what,
+    ESP_LOGI(TAG, "frame[%s] MATCH (%u bytes)", what,
              static_cast<unsigned>(actual.size()));
     return true;
   }

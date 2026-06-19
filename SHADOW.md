@@ -38,14 +38,13 @@ All logging uses the `phnix_shadow` tag.
    a **local checkout** of this branch is the reliable path — a pure remote
    package won't fetch the `lib/`/`esphome_shadow/` files.)
 
-2. **Turn on the `phnix_shadow` logs** in your device YAML:
+2. **No logger changes are needed.** All shadow output (`MATCH`, `MISMATCH`,
+   the decoded view, and the raw block hex) is logged at INFO/WARN under the
+   `phnix_shadow` tag, so it shows at the firmware's default `level: INFO`.
 
-   ```yaml
-   logger:
-     level: INFO
-     logs:
-       phnix_shadow: DEBUG   # DEBUG shows MATCH lines too; INFO shows only the parsed view + MISMATCH/WARN
-   ```
+   > Note: don't set `logs: { phnix_shadow: DEBUG }` — ESPHome rejects a per-tag
+   > level *more* verbose than the global `level:` (which is INFO here), and
+   > there's nothing logged below INFO anyway.
 
 3. **Keep the device awake** so it polls continuously: turn on the
    `Prevent Deep Sleep` helper (`input_boolean.pool_heater_prevent_deep_sleep`).
