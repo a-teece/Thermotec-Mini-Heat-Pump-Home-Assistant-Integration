@@ -705,9 +705,9 @@ captured from the reference unit:
 # Power on
 63 10 03 F3 00 01 02 00 01 F1 31
 
-# Mode = Heat
-63 10 03 F4 00 02 04 00 00 00 00 1C 51
 # Mode = Cool
+63 10 03 F4 00 02 04 00 00 00 00 1C 51
+# Mode = Heat
 63 10 03 F4 00 02 04 00 01 00 88 4D F7
 # Mode = Auto
 63 10 03 F4 00 02 04 00 02 00 8C BC 34
