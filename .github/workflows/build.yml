@@ -48,3 +48,23 @@ jobs:
         uses: esphome/build-action@v6
         with:
           yaml-file: pool-heatpump-proxy.yaml
+
+  phnix-lib:
+    name: phnix library tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Host-build and unit-test the platform-agnostic protocol library. No ESP
+      # toolchain needed — just a C++17 compiler and CMake (both preinstalled on
+      # the runner). This is the fast, TDD-friendly check: protocol logic
+      # (CRC, frame building, decoding) is validated against captured frames in
+      # seconds, independently of the firmware compile.
+      - name: Configure
+        run: cmake -S lib/phnix -B lib/phnix/build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build lib/phnix/build
+
+      - name: Test
+        run: ctest --test-dir lib/phnix/build --output-on-failure
