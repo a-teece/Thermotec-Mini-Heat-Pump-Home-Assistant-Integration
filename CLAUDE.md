@@ -32,6 +32,22 @@ new protocol facts are discovered.
   own ESPHome dashboard. It pulls `pool-heatpump-proxy.yaml` from GitHub via
   `packages:` and overrides substitutions/secrets locally. Keep its commented
   override list in sync with the substitutions block in the main YAML.
+- `components/phnix/` — the **PHNIX protocol codec**, a small platform-agnostic
+  C++17 library (CRC-16, Modbus frame builders, notification decoder, error
+  decoding) packaged as a library-only ESPHome external component. The YAML
+  lambdas call into it (`phnix::build_*`, `phnix::parse_block`,
+  `phnix::error_text`) instead of hand-rolling Modbus. Consumers fetch it from
+  GitHub via `external_components:` (no local files); the ref is the
+  `phnix_components_ref` substitution (default `main`, keep in sync with the
+  package `ref:`). The codec has **no BLE/ESPHome dependency** — that's what
+  makes it host-unit-testable and portable to a future native firmware. Keep
+  `Protocol.md` and this codec in sync when protocol facts change.
+- `tests/phnix/` — host unit tests (CMake + a dependency-free harness) for the
+  codec, compiling the same `components/phnix/*.cpp`. Run with
+  `cmake -S tests/phnix -B tests/phnix/build && cmake --build tests/phnix/build
+  && ctest --test-dir tests/phnix/build`. A separate CI job runs them. Includes
+  golden frames captured live from the reference unit. Kept *outside*
+  `components/phnix/` so ESPHome never compiles the test harness into firmware.
 - `CHANGELOG.md` — user-facing change log (Keep a Changelog format). Update
   the `[Unreleased]` section as part of any change that affects users.
 - `PROTOCOL.md` — comprehensive BLE/Modbus protocol reference.

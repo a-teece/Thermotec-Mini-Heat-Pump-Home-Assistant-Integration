@@ -61,10 +61,10 @@ jobs:
       # (CRC, frame building, decoding) is validated against captured frames in
       # seconds, independently of the firmware compile.
       - name: Configure
-        run: cmake -S lib/phnix -B lib/phnix/build -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -S tests/phnix -B tests/phnix/build -DCMAKE_BUILD_TYPE=Debug
 
       - name: Build
-        run: cmake --build lib/phnix/build
+        run: cmake --build tests/phnix/build
 
       - name: Test
-        run: ctest --test-dir lib/phnix/build --output-on-failure
+        run: ctest --test-dir tests/phnix/build --output-on-failure

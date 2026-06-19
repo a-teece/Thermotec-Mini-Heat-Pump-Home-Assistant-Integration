@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "phnix/protocol.h"
+#include "protocol.h"
 
 namespace phnix {
 

@@ -6,8 +6,8 @@
 // build one to the §3.2 format and assert round-trip decode).
 #include <map>
 
-#include "phnix/crc.h"
-#include "phnix/decode.h"
+#include "crc.h"
+#include "decode.h"
 #include "test_framework.h"
 
 using namespace phnix;
@@ -71,6 +71,17 @@ TEST(error_unknown_bits_logged) {
   CHECK_EQ(codes.size(), static_cast<size_t>(2));
   CHECK_EQ(codes[0], std::string("E01"));
   CHECK_EQ(codes[1], std::string("E03"));
+}
+
+TEST(error_text_verbose_matches_firmware_wording) {
+  CHECK_EQ(error_text(0x0000), std::string(""));
+  CHECK_EQ(error_text(0x0004), std::string("E03 No water flow"));
+  CHECK_EQ(error_text(0x0006),
+           std::string("E02 Low pressure protection; E03 No water flow"));
+  CHECK_EQ(error_text(0x0001), std::string("E01 High pressure protection"));
+  CHECK_EQ(error_text(0x0008), std::string("E-unknown bits 0x0008"));
+  CHECK_EQ(error_text(0x000C),
+           std::string("E03 No water flow; E-unknown bits 0x0008"));
 }
 
 // --- Block parsing ---------------------------------------------------------

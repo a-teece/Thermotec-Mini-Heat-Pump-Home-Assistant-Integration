@@ -7,7 +7,7 @@
 // `valid` here is itself a test: it proves the library accepts genuine
 // hardware frames (CRC + length), which is exactly what shadow mode confirmed
 // on-device.
-#include "phnix/decode.h"
+#include "decode.h"
 #include "test_framework.h"
 
 using namespace phnix;

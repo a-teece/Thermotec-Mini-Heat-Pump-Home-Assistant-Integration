@@ -4,7 +4,7 @@
 // (Protocol.md §5 and Appendix A). If the CRC routine is correct, every
 // captured frame must self-validate, and recomputing the CRC over the payload
 // must reproduce the captured trailing two bytes.
-#include "phnix/crc.h"
+#include "crc.h"
 #include "test_framework.h"
 
 using namespace phnix;

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "phnix/frame.h"
+#include "frame.h"
 
 #include <cmath>
 
-#include "phnix/crc.h"
+#include "crc.h"
 
 namespace phnix {
 

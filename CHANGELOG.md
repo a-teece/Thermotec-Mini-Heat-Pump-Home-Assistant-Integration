@@ -26,24 +26,28 @@ Version numbers follow Semantic Versioning:
 
 ### Added
 
-- **`lib/phnix` — a platform-agnostic, host-unit-tested protocol library.**
-  First step of extracting the heat-pump Modbus/BLE logic out of the ESPHome
-  YAML lambdas into real C++ that can be tested on a dev machine (TDD) and
-  reused by a future native firmware. Pure codec (no BLE/ESPHome/Arduino
-  dependency): CRC-16, command-frame builders (power, mode, target, read-all,
-  generic write), and decoders (TEMP1 + fault sentinels, error bitmask, block
-  parsing, aggregated `HeatPumpState`). 31 unit tests assert byte-for-byte
-  against frames captured from the reference unit — including six **golden
-  block notifications captured live via shadow mode** — added to CI as a
-  separate fast job. No change to the shipped firmware behaviour yet.
-- **Shadow-mode verification harness** (dev branch only). Compiles `lib/phnix`
-  into the firmware and cross-checks it against the existing parser/frame-builder
-  lambdas on live hardware, logging any disagreement under the `phnix_shadow`
-  tag. Observation only — no runtime behaviour change. See
-  [`SHADOW.md`](./SHADOW.md). Removed at cutover, before any release to `main`.
-  **Validated on the reference unit:** every power/mode/target frame matched the
-  library byte-for-byte, all four block types decoded correctly (incl. an E03
-  fault and firmware identity 1.2/494), zero mismatches.
+- **`phnix` protocol codec, extracted into a host-unit-tested ESPHome external
+  component** (`components/phnix/`). The heat-pump Modbus/BLE protocol logic
+  (CRC-16, command-frame builders, notification decoder, error decoding) now
+  lives in real, testable C++ — 32 unit tests run on CI, asserting byte-for-byte
+  against frames captured from the reference unit (including six golden block
+  notifications captured live from hardware). The same files are portable to a
+  future native firmware. Pulled into the firmware from GitHub via
+  `external_components:` — no local files for consumers.
+
+### Changed
+
+- **The firmware now uses the `phnix` codec instead of inline lambdas** for the
+  Modbus work: the notification parser, the power/mode/target/poll frame
+  builders, and the error-code text are all routed through the library. Behaviour
+  is unchanged (validated on the reference unit via a shadow-comparison pass:
+  every frame matched byte-for-byte and every block decoded correctly before the
+  switch), with one robustness improvement — incoming notifications are now
+  **CRC-validated** before parsing, so a corrupt frame is dropped rather than
+  mis-decoded.
+- New `phnix_components_ref` substitution (default `main`) selects the git ref
+  the component is fetched from; point it at a feature branch to test
+  in-development protocol code.
 
 ### Fixed
 - **`Protocol.md`**: corrected the Heat/Cool labels on the mode-change sample
