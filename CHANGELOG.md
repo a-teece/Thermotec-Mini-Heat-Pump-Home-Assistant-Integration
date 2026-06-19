@@ -24,6 +24,12 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Fixed
+- **`Protocol.md`**: corrected the Heat/Cool labels on the mode-change sample
+  frames in Appendix A. The byte sequences and CRCs were always correct; only
+  the comment labels were swapped. They now match the authoritative mapping
+  used elsewhere in the document and in the firmware (Cool=0, Heat=1, Auto=2).
+
 ## [v1.0.0] - 2026-06-08
 
 First public release. An ESPHome firmware for an ESP32 that bridges a PHNIX /
