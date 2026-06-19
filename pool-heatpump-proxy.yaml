@@ -284,6 +284,19 @@ globals:
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
+  # Shadow-mode verification (dev branch only — do not merge to main as-is).
+  # Compiles the platform-agnostic `phnix` protocol library into the firmware
+  # and exposes it to the lambdas via the `phnix_shadow` glue header, so the
+  # library can be cross-checked against the existing hand-written parser/frame
+  # builders on live hardware. Paths are relative to this YAML; consumers using
+  # the remote package will not have these files, so this block must be removed
+  # (and the shadow calls below) before any release to `main`. See SHADOW.md.
+  includes:
+    - lib/phnix/include/phnix
+    - lib/phnix/src/crc.cpp
+    - lib/phnix/src/frame.cpp
+    - lib/phnix/src/decode.cpp
+    - esphome_shadow/phnix_shadow.h
   on_boot:
     # Run after WiFi/API are initialized but before deep_sleep enters.
     # Priority -100 places us late in the boot sequence.
@@ -821,6 +834,10 @@ sensor:
     lambda: |-
       // Sanity check
       if (x.size() < 5 || x[0] != 0x63) return {};
+
+      // Shadow mode: let the phnix library parse the same raw notification and
+      // log its view + raw hex (observation only — see esphome_shadow/).
+      phnix_shadow::check_notification(x);
 
       // Write ACK (8-byte Modbus 0x10 response)
       if (x[1] == 0x10 && x.size() == 8) {
@@ -1429,6 +1446,13 @@ script:
             msg.push_back((crc >> 8) & 0xFF);
             ESP_LOGI("heatpump", "Set %s target = %.1f (reg 0x%02X%02X)",
                      mode_str.c_str(), temp_x10 / 10.0, addr_hi, addr_lo);
+            // Shadow: compare against the library, using the already-clamped
+            // value (the library does not clamp — see build_set_target docs).
+            phnix::Mode shadow_mode = (mode_str == "Cool") ? phnix::Mode::Cool
+                                    : (mode_str == "Auto") ? phnix::Mode::Auto
+                                                           : phnix::Mode::Heat;
+            phnix_shadow::check_frame("target", msg,
+                                      phnix::build_set_target(shadow_mode, temp_x10 / 10.0f));
             return msg;
 
   # Reconcile the heat pump's target temperature with the desired (HA helper)
@@ -1512,6 +1536,8 @@ script:
             msg.push_back(crc & 0xFF);
             msg.push_back((crc >> 8) & 0xFF);
             ESP_LOGI("heatpump", "Set power = %s", power_on ? "ON" : "OFF");
+            // Shadow: compare the firmware frame against the library's.
+            phnix_shadow::check_frame("power", msg, phnix::build_power(power_on));
             return msg;
 
   # Reconcile the heat pump's power state with the desired (HA helper) state,
@@ -1622,6 +1648,11 @@ script:
             msg.push_back(crc & 0xFF);
             msg.push_back((crc >> 8) & 0xFF);
             ESP_LOGI("heatpump", "Set mode = %s", mode.c_str());
+            // Shadow: compare the firmware frame against the library's.
+            phnix::Mode shadow_mode = (mode == "Cool") ? phnix::Mode::Cool
+                                    : (mode == "Auto") ? phnix::Mode::Auto
+                                                       : phnix::Mode::Heat;
+            phnix_shadow::check_frame("mode", msg, phnix::build_mode(shadow_mode));
             return msg;
 
   # Reconcile the heat pump's operating mode with the desired (HA helper)
