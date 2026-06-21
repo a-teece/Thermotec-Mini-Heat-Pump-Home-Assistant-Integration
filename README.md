@@ -139,7 +139,15 @@ ap_fallback_password: "a strong password for the fallback hotspot"
 ota_password: "a strong password for OTA updates"
 pool_heatpump_proxy_api_key: "a random 32-character hex string"
 pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
+mqtt_username: "your MQTT broker username"
+mqtt_password: "your MQTT broker password"
 ```
+
+> **MQTT (v2.0.0 transition, in progress):** the device connects to an MQTT
+> broker (e.g. the Home Assistant Mosquitto add-on) — set `mqtt_username` /
+> `mqtt_password` above and point `mqtt_broker` at your broker in your device
+> file. MQTT currently runs alongside the native API while the transition is
+> completed; see the CHANGELOG.
 
 To generate a random API key, run `openssl rand -hex 16` in a terminal, or use any random hex generator online.
 

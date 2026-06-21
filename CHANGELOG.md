@@ -24,6 +24,28 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Added
+- **MQTT transport (start of the v2.0.0 MQTT transition).** The device now
+  connects to an MQTT broker with Home Assistant discovery. Tuned for
+  battery/deep-sleep operation: `command_retain` (HA publishes control commands
+  retained, so values changed while asleep are applied on the next wake) and
+  `reboot_timeout: 0s` (no reset on a transient broker outage). New
+  `mqtt_broker`/`mqtt_port` substitutions and `mqtt_username`/`mqtt_password`
+  secrets.
+
+### In progress (v2.0.0, breaking — not yet complete)
+This is **stage 1** of replacing the native API with MQTT. MQTT currently runs
+*alongside* the API (so Home Assistant may show duplicate entities) while the
+change is validated incrementally. Remaining stages:
+- **Stage 2:** move control to retained MQTT command topics + auto-discovered
+  entities, switch `time:` to `sntp`, then remove `api:` and the
+  `platform: homeassistant` helper reads — and delete the snapshot-to-globals
+  machinery (the broker's retained state replaces it).
+- **Stage 3:** optional always-on / USB mode (no deep sleep).
+
+When complete this is a **MAJOR** release: it requires an MQTT broker and
+changes the Home Assistant setup (no more manual helpers).
+
 ## [v1.1.0] - 2026-06-21
 
 ### Added

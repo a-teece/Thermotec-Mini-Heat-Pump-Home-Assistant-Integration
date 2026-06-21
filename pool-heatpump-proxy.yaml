@@ -8,6 +8,8 @@
 #  ota_password: "a strong password for OTA updates, e.g. my_very_secure_password"
 #  pool_heatpump_proxy_api_key: "a random 16-byte hex string for API encryption, e.g. 0123456789abcdef0123456789abcdef"
 #  pool_heatpump_proxy_device_mac_address: "your heat pump's BLE MAC address, e.g. AA:BB:CC:DD:EE:FF"
+#  mqtt_username: "your MQTT broker username"   # (MQTT transition — see CHANGELOG)
+#  mqtt_password: "your MQTT broker password"
 
 # ─── Globals ────────────────────────────────────────────────────────────────
 substitutions:
@@ -19,6 +21,12 @@ substitutions:
   # in-development protocol code. Should normally track the package `ref:` you
   # set in your device file.
   phnix_components_ref: main
+
+  # MQTT broker (the device's Home Assistant transport — see CHANGELOG / the
+  # v2.0.0 MQTT transition). Override the host to point at your broker; the
+  # username/password come from secrets.yaml.
+  mqtt_broker: homeassistant.local
+  mqtt_port: "1883"
 
   service_uuid: "0000ff01-0000-1000-8000-00805f9b34fb"
   write_char_uuid: "0000ff03-0000-1000-8000-00805f9b34fb"
@@ -460,9 +468,33 @@ logger:
     sensor: WARN
 
 # ─── Home Assistant API ─────────────────────────────────────────────────────
+# NOTE (v2.0.0 MQTT transition, in progress): the native API is being replaced
+# by MQTT. In this stage MQTT runs *alongside* the API so the change can be
+# validated incrementally; a later stage removes `api:` (and the
+# `platform: homeassistant` helper/time reads that depend on it). While both are
+# enabled, Home Assistant may show duplicate entities (native + MQTT discovery).
 api:
   encryption:
     key: !secret pool_heatpump_proxy_api_key
+
+# ─── MQTT ───────────────────────────────────────────────────────────────────
+# Home Assistant transport via an MQTT broker (e.g. the Mosquitto add-on).
+# Key settings for a battery / deep-sleep device:
+#   * command_retain — Home Assistant publishes control commands *retained*, so
+#     a value changed while the device sleeps is delivered on its next connect
+#     (this is what lets retained command topics replace the input_* helpers).
+#   * reboot_timeout 0s — never reboot just because the broker is briefly
+#     unreachable; the device would otherwise reset mid-cycle on a blip.
+#   * discovery — auto-creates the HA entities, so no manual helpers/templates.
+mqtt:
+  broker: ${mqtt_broker}
+  port: ${mqtt_port}
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  discovery: true
+  discovery_retain: true
+  command_retain: true
+  reboot_timeout: 0s
 
 ota:
   - platform: esphome
