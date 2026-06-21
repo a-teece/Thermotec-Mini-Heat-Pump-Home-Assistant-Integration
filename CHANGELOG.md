@@ -24,6 +24,8 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v1.1.0] - 2026-06-21
+
 ### Added
 
 - **`phnix` protocol codec, extracted into a host-unit-tested ESPHome external
