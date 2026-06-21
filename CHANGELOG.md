@@ -34,6 +34,12 @@ Version numbers follow Semantic Versioning:
   1883). (Retaining *control commands* across sleep — via per-entity
   `command_retain` — lands in the stage that introduces the discovered control
   entities.)
+- **`enable_deep_sleep` substitution (default `"true"`)** — set to `"false"` to
+  permanently disable deep sleep at build time for mains/USB-powered installs.
+  The device then stays awake and polls every 30 s, with no dependence on the
+  runtime *Prevent Deep Sleep* helper (the build-time setting also overrides
+  that helper, so it can't force a sleep). Backwards-compatible: the default
+  preserves the existing battery deep-sleep behaviour.
 
 ### In progress (v2.0.0, breaking — not yet complete)
 This is **stage 1** of replacing the native API with MQTT. MQTT currently runs
@@ -43,7 +49,6 @@ change is validated incrementally. Remaining stages:
   entities, switch `time:` to `sntp`, then remove `api:` and the
   `platform: homeassistant` helper reads — and delete the snapshot-to-globals
   machinery (the broker's retained state replaces it).
-- **Stage 3:** optional always-on / USB mode (no deep sleep).
 
 When complete this is a **MAJOR** release: it requires an MQTT broker and
 changes the Home Assistant setup (no more manual helpers).

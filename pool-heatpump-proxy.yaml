@@ -65,9 +65,17 @@ substitutions:
   #  Options: Heat, Cool, Auto
   home_assistant_desired_mode_select_name: input_select.pool_heater_mode
 
+  # Permanently enable ("true") or disable ("false") deep sleep.
+  # "false" = always-on mode: the device never sleeps and polls continuously
+  # (every 30 s) — intended for mains/USB-powered installs where battery life
+  # isn't a concern. This is a build-time choice and overrides the runtime
+  # "Prevent Deep Sleep" helper. Leave "true" for battery operation.
+  enable_deep_sleep: "true"
+
   # Sleep duration during "day" hours (between day_start_hour and day_end_hour).
   # Use shorter durations during the hours when you're likely to adjust settings.
   # Valid units: s (seconds), min (minutes), h (hours). E.g. "10min", "1h".
+  # (Ignored when enable_deep_sleep is "false".)
   deep_sleep_duration_day: 5min
 
   # Sleep duration during "night" hours (outside the day window).
@@ -383,13 +391,17 @@ esphome:
       # ── Phase 3: Decide between awake mode and a sleep cycle ────────────
       - if:
           condition:
-            - binary_sensor.is_on: prevent_deep_sleep_switch
+            # Stay awake if the runtime helper says so, OR if deep sleep is
+            # disabled at build time (enable_deep_sleep: "false" → always-on).
+            or:
+              - binary_sensor.is_on: prevent_deep_sleep_switch
+              - lambda: 'return !(${enable_deep_sleep});'
           then:
-            # ── AWAKE MODE: stay on for OTA, debugging, or fast feedback ─
+            # ── AWAKE MODE: stay on (always-on build, OTA, debugging) ───
             - deep_sleep.prevent: deep_sleep_1
             - logger.log:
                 level: INFO
-                format: "Deep sleep prevented — OTA/debug mode active"
+                format: "Staying awake — deep sleep disabled or prevented"
             # The interval timer below handles continuous 30s polling.
           else:
             # ── SLEEP CYCLE: wake → connect → sync target → sleep ───────
@@ -629,7 +641,12 @@ binary_sensor:
       then:
         - if:
             condition:
-              - binary_sensor.is_off: prevent_deep_sleep_switch
+              # Only sleep if the helper went off AND deep sleep is enabled at
+              # build time. In always-on builds (enable_deep_sleep: "false") the
+              # helper can't force a sleep.
+              and:
+                - binary_sensor.is_off: prevent_deep_sleep_switch
+                - lambda: 'return ${enable_deep_sleep};'
             then:
               # Toggle was just turned off while device was awake → sleep.
               - logger.log:
