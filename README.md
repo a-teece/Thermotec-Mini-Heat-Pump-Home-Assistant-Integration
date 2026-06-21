@@ -244,7 +244,7 @@ Place the ESP within BLE range of the heat pump — typically **2–5 metres** w
 
 If you have USB power near your heat pump, you can run the ESP permanently from USB:
 
-- Keep the **Pool Heater Prevent Deep Sleep** helper toggled **on** at all times. This disables the sleep cycle; the ESP polls the heat pump every 30 seconds instead.
+- **Recommended:** set `enable_deep_sleep: "false"` in your device file's substitutions. This permanently disables the sleep cycle at build time — the ESP stays awake and polls every 30 seconds — so you don't depend on the runtime helper being on. (Alternatively, keep the **Pool Heater Prevent Deep Sleep** helper toggled **on** at all times for the same effect without recompiling.)
 - The battery voltage and battery level sensors will report meaningless values (~5 V USB supply, not a LiPo cell). You can hide or disable these entities in HA, or remove the `battery_voltage` and `battery_level` sensors from the YAML.
 - OTA updates work at any time — the ESP is always awake and reachable.
 

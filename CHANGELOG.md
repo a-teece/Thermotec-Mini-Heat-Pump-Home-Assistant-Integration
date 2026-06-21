@@ -24,6 +24,14 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Added
+- **`enable_deep_sleep` substitution (default `"true"`)** — set to `"false"` to
+  permanently disable deep sleep at build time for mains/USB-powered installs.
+  The device then stays awake and polls every 30 s, with no dependence on the
+  runtime *Prevent Deep Sleep* helper (the build-time setting also overrides
+  that helper, so it can't force a sleep). Backwards-compatible: the default
+  preserves the existing battery deep-sleep behaviour.
+
 ## [v1.1.0] - 2026-06-21
 
 ### Added

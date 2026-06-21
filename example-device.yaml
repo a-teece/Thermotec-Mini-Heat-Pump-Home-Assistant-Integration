@@ -50,7 +50,12 @@ substitutions:
   # it to the same branch name you point `ref:` at:
   # phnix_components_ref: main
 
-  # ── Sleep schedule (optional) ─────────────────────────────────────────────
+  # ── Deep sleep on/off (optional) ──────────────────────────────────────────
+  # Set to "false" for a mains/USB-powered install: the device never sleeps and
+  # polls continuously. Leave unset (or "true") for battery operation.
+  # enable_deep_sleep: "true"
+
+  # ── Sleep schedule (optional; ignored when enable_deep_sleep is "false") ───
   # deep_sleep_duration_day: 5min
   # deep_sleep_duration_night: 15min
   # day_start_hour: "9"
