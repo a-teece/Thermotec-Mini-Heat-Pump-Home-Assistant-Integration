@@ -42,13 +42,18 @@ Version numbers follow Semantic Versioning:
   preserves the existing battery deep-sleep behaviour.
 
 ### In progress (v2.0.0, breaking — not yet complete)
-This is **stage 1** of replacing the native API with MQTT. MQTT currently runs
-*alongside* the API (so Home Assistant may show duplicate entities) while the
-change is validated incrementally. Remaining stages:
-- **Stage 2:** move control to retained MQTT command topics + auto-discovered
-  entities, switch `time:` to `sntp`, then remove `api:` and the
-  `platform: homeassistant` helper reads — and delete the snapshot-to-globals
-  machinery (the broker's retained state replaces it).
+Replacing the native API with MQTT, in stages validated incrementally. MQTT
+currently runs *alongside* the API, so Home Assistant may show duplicate
+entities until `api:` is removed.
+- **Stage 1 (done):** MQTT transport + discovery.
+- **Stage 2a (done):** the control surface is now **device-native** — a Power
+  switch, Mode select, Target number and Prevent Deep Sleep switch, published
+  via MQTT discovery with `command_retain` (desired value survives deep sleep)
+  and restored from flash on boot. These replace the HA `input_*` helpers +
+  `platform: homeassistant` mirrors; the verified `sync_*` reconcile scripts are
+  unchanged. **No manual HA helpers needed.**
+- **Stage 2b (remaining):** remove `api:`, switch `time:` → `sntp`, and delete
+  the snapshot-to-globals machinery (the broker's retained state replaces it).
 
 When complete this is a **MAJOR** release: it requires an MQTT broker and
 changes the Home Assistant setup (no more manual helpers).
