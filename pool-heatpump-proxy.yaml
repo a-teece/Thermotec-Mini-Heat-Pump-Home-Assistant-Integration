@@ -480,12 +480,15 @@ api:
 # ─── MQTT ───────────────────────────────────────────────────────────────────
 # Home Assistant transport via an MQTT broker (e.g. the Mosquitto add-on).
 # Key settings for a battery / deep-sleep device:
-#   * command_retain — Home Assistant publishes control commands *retained*, so
-#     a value changed while the device sleeps is delivered on its next connect
-#     (this is what lets retained command topics replace the input_* helpers).
 #   * reboot_timeout 0s — never reboot just because the broker is briefly
 #     unreachable; the device would otherwise reset mid-cycle on a blip.
 #   * discovery — auto-creates the HA entities, so no manual helpers/templates.
+#   * discovery_retain — HA re-discovers entities after a restart without the
+#     (sleeping) device needing to be online to republish.
+# NOTE: making Home Assistant retain *control commands* (so a value changed
+# while the device sleeps is applied on the next wake) is a per-entity setting
+# (`command_retain: true` on each control switch/number/select) — added in the
+# stage that introduces those entities, not at this global level.
 mqtt:
   broker: ${mqtt_broker}
   port: ${mqtt_port}
@@ -493,7 +496,6 @@ mqtt:
   password: !secret mqtt_password
   discovery: true
   discovery_retain: true
-  command_retain: true
   reboot_timeout: 0s
 
 ota:
