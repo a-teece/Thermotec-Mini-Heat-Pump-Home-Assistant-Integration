@@ -43,11 +43,11 @@ substitutions:
   # home_assistant_desired_target_temp_number_name: input_number.pool_target_temperature
   # home_assistant_desired_mode_select_name: input_select.pool_heater_mode
 
-  # ── MQTT broker ───────────────────────────────────────────────────────────
-  # The device talks to Home Assistant over MQTT. Point this at your broker
-  # (e.g. the Mosquitto add-on) and add `mqtt_username` / `mqtt_password` to
-  # secrets.yaml. Default host is homeassistant.local; default port 1883.
-  # mqtt_broker: homeassistant.local
+  # ── MQTT (port only) ──────────────────────────────────────────────────────
+  # The device talks to Home Assistant over MQTT. The broker host and
+  # credentials go in secrets.yaml (`mqtt_broker`, `mqtt_username`,
+  # `mqtt_password`) — nothing to set here. Only override the port for a
+  # non-standard broker port (default 1883):
   # mqtt_port: "1883"
 
   # ── Protocol component version (optional) ─────────────────────────────────

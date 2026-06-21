@@ -42,6 +42,7 @@ jobs:
           ota_password: "ci-ota-password"
           pool_heatpump_proxy_api_key: "$(openssl rand -base64 32)"
           pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
+          mqtt_broker: "ci-broker.local"
           mqtt_username: "ci-mqtt-user"
           mqtt_password: "ci-mqtt-password"
           EOF

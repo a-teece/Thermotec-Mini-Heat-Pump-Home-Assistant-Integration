@@ -8,7 +8,8 @@
 #  ota_password: "a strong password for OTA updates, e.g. my_very_secure_password"
 #  pool_heatpump_proxy_api_key: "a random 16-byte hex string for API encryption, e.g. 0123456789abcdef0123456789abcdef"
 #  pool_heatpump_proxy_device_mac_address: "your heat pump's BLE MAC address, e.g. AA:BB:CC:DD:EE:FF"
-#  mqtt_username: "your MQTT broker username"   # (MQTT transition — see CHANGELOG)
+#  mqtt_broker: "your MQTT broker host, e.g. homeassistant.local or 192.168.1.x"  # (MQTT transition — see CHANGELOG)
+#  mqtt_username: "your MQTT broker username"
 #  mqtt_password: "your MQTT broker password"
 
 # ─── Globals ────────────────────────────────────────────────────────────────
@@ -22,10 +23,11 @@ substitutions:
   # set in your device file.
   phnix_components_ref: main
 
-  # MQTT broker (the device's Home Assistant transport — see CHANGELOG / the
-  # v2.0.0 MQTT transition). Override the host to point at your broker; the
-  # username/password come from secrets.yaml.
-  mqtt_broker: homeassistant.local
+  # MQTT broker port (the device's Home Assistant transport — see CHANGELOG /
+  # the v2.0.0 MQTT transition). The broker host and credentials live in
+  # secrets.yaml (mqtt_broker / mqtt_username / mqtt_password) so the whole
+  # connection is configured in one place without editing this file; only
+  # override the port here for a non-standard broker port.
   mqtt_port: "1883"
 
   service_uuid: "0000ff01-0000-1000-8000-00805f9b34fb"
@@ -490,7 +492,7 @@ api:
 # (`command_retain: true` on each control switch/number/select) — added in the
 # stage that introduces those entities, not at this global level.
 mqtt:
-  broker: ${mqtt_broker}
+  broker: !secret mqtt_broker
   port: ${mqtt_port}
   username: !secret mqtt_username
   password: !secret mqtt_password
