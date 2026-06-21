@@ -122,6 +122,14 @@ globals:
     initial_value: 'false'
     restore_value: no
 
+  # Tracks whether the MQTT broker connection is up (set from mqtt on_connect/
+  # on_disconnect). on_boot waits on this before reconciling — the role
+  # api.connected used to play.
+  - id: mqtt_connected
+    type: bool
+    initial_value: 'false'
+    restore_value: no
+
   # Counts write attempts within a single sync_* run so each verify-and-retry
   # loop has a bounded number of tries. Reset at the start of each run; not
   # meaningful across wakes.
@@ -375,17 +383,18 @@ esphome:
                 if (id(g_master_ver)[0])  id(master_program_version).publish_state(std::string(id(g_master_ver)));
                 if (id(g_soft_code)[0])   id(main_control_software_code).publish_state(std::string(id(g_soft_code)));
 
-      # ── Phase 1: Wait for the HA API ────────────────────────────────────
-      # We need the API to read the prevent-sleep helper and the desired
-      # target temp helper. Without it we'd risk sleeping when we shouldn't.
+      # ── Phase 1: Wait for the MQTT broker ───────────────────────────────
+      # We need the broker up so it can re-deliver the retained control
+      # commands (desired power/mode/target) before we decide whether to sleep.
       - wait_until:
           condition:
-            api.connected:
+            lambda: 'return id(mqtt_connected);'
           timeout: 15s
 
-      # ── Phase 2: Give HA a moment to push helper states ─────────────────
-      # After the API connects, HA sends the current values of mirrored
-      # helpers. A short delay ensures they've arrived before we read them.
+      # ── Phase 2: Let the broker deliver retained commands ───────────────
+      # On (re)connect the broker re-sends the retained command topics; a short
+      # delay ensures the desired_* controls reflect any value changed while we
+      # were asleep before the on_connect reconcile reads them.
       - delay: 2s
 
       # ── Phase 3: Decide between awake mode and a sleep cycle ────────────
@@ -482,16 +491,7 @@ logger:
     sensor: WARN
 
 # ─── Home Assistant API ─────────────────────────────────────────────────────
-# NOTE (v2.0.0 MQTT transition, in progress): the native API is being replaced
-# by MQTT. In this stage MQTT runs *alongside* the API so the change can be
-# validated incrementally; a later stage removes `api:` (and the
-# `platform: homeassistant` helper/time reads that depend on it). While both are
-# enabled, Home Assistant may show duplicate entities (native + MQTT discovery).
-api:
-  encryption:
-    key: !secret pool_heatpump_proxy_api_key
-
-# ─── MQTT ───────────────────────────────────────────────────────────────────
+# ─── MQTT (Home Assistant transport) ────────────────────────────────────────
 # Home Assistant transport via an MQTT broker (e.g. the Mosquitto add-on).
 # Key settings for a battery / deep-sleep device:
 #   * reboot_timeout 0s — never reboot just because the broker is briefly
@@ -510,6 +510,12 @@ mqtt:
   discovery: true
   discovery_retain: true
   reboot_timeout: 0s
+  # Track connection state so on_boot can wait for the broker before deciding
+  # whether to sleep (the API's api.connected role, now MQTT's).
+  on_connect:
+    - lambda: 'id(mqtt_connected) = true;'
+  on_disconnect:
+    - lambda: 'id(mqtt_connected) = false;'
 
 ota:
   - platform: esphome
@@ -527,18 +533,18 @@ wifi:
 captive_portal:
 
 # ─── Time ───────────────────────────────────────────────────────────────────
-# Sync from HA over the API. Required for the last_connected text sensor
-# to display a human-readable wake timestamp.
+# SNTP (NTP) — no API dependency. Required for the last_connected text sensor
+# and the day/night sleep schedule. id kept as ha_time (referenced elsewhere).
 time:
-  - platform: homeassistant
+  - platform: sntp
     id: ha_time
     on_time_sync:
       then:
-        # Stamp the Last Connected heartbeat as soon as HA time is available.
-        # This fires shortly after the API connects on every boot/reconnect,
-        # in BOTH sleep and prevent-deep-sleep mode. Without it, the awake
-        # (prevent-sleep) branch of on_boot never publishes last_connected at
-        # all — leaving it stuck at 'unknown' the whole debug session.
+        # Stamp the Last Connected heartbeat as soon as the clock is set.
+        # Fires shortly after NTP sync on every boot/reconnect, in BOTH sleep
+        # and prevent-deep-sleep mode. Without it, the awake (prevent-sleep)
+        # branch of on_boot never publishes last_connected at all — leaving it
+        # stuck at 'unknown' the whole debug session.
         #
         # We write the formatted timestamp into the retained global (not just
         # the sensor) so Phase 0 of on_boot can republish it on the next wake

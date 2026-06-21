@@ -42,9 +42,7 @@ Version numbers follow Semantic Versioning:
   preserves the existing battery deep-sleep behaviour.
 
 ### In progress (v2.0.0, breaking — not yet complete)
-Replacing the native API with MQTT, in stages validated incrementally. MQTT
-currently runs *alongside* the API, so Home Assistant may show duplicate
-entities until `api:` is removed.
+Replacing the native API with MQTT, in stages validated incrementally.
 - **Stage 1 (done):** MQTT transport + discovery.
 - **Stage 2a (done):** the control surface is now **device-native** — a Power
   switch, Mode select, Target number and Prevent Deep Sleep switch, published
@@ -52,8 +50,14 @@ entities until `api:` is removed.
   and restored from flash on boot. These replace the HA `input_*` helpers +
   `platform: homeassistant` mirrors; the verified `sync_*` reconcile scripts are
   unchanged. **No manual HA helpers needed.**
-- **Stage 2b (remaining):** remove `api:`, switch `time:` → `sntp`, and delete
-  the snapshot-to-globals machinery (the broker's retained state replaces it).
+- **Stage 2b-1 (done):** **`api:` removed — MQTT is now the sole transport.**
+  `time:` switched to `sntp` (no API dependency); `on_boot` waits on the MQTT
+  broker (then a short settle for retained commands) instead of the API. HA
+  no longer shows duplicate entities.
+- **Stage 2b-2 (remaining):** delete the now-redundant snapshot-to-globals
+  machinery — MQTT's retained state topics keep HA populated across deep sleep,
+  so the snapshot/restore globals, `on_boot` Phase 0 republish, and the
+  pre-sleep flash-sync delay are no longer needed.
 
 When complete this is a **MAJOR** release: it requires an MQTT broker and
 changes the Home Assistant setup (no more manual helpers).
