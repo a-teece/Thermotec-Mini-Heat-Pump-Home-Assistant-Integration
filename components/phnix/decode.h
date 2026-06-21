@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "phnix/protocol.h"
+#include "protocol.h"
 
 namespace phnix {
 
@@ -38,6 +38,12 @@ std::vector<std::string> active_error_codes(uint16_t error_reg);
 
 // The active codes joined with ", ", or "" when no bits are set.
 std::string error_description(uint16_t error_reg);
+
+// Verbose, human-readable description of the active E-code bits, joined with
+// "; " (e.g. "E02 Low pressure protection; E03 No water flow"). Unknown set
+// bits are summarised as "E-unknown bits 0x....". Empty string if none set.
+// (P-code sensor faults are not in this register — see Protocol.md §6.2.)
+std::string error_text(uint16_t error_reg);
 
 // --- Block notification parsing -------------------------------------------
 

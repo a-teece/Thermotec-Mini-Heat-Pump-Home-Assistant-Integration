@@ -13,6 +13,13 @@
 substitutions:
   device_name: pool-heatpump-proxy
   friendly_name: Pool Heatpump Proxy
+
+  # Git ref the `phnix` protocol component is fetched from (external_components
+  # below). Defaults to the stable `main`; point it at a feature branch to test
+  # in-development protocol code. Should normally track the package `ref:` you
+  # set in your device file.
+  phnix_components_ref: main
+
   service_uuid: "0000ff01-0000-1000-8000-00805f9b34fb"
   write_char_uuid: "0000ff03-0000-1000-8000-00805f9b34fb"
   notify_char_uuid: "0000ff02-0000-1000-8000-00805f9b34fb"
@@ -424,6 +431,23 @@ esp32:
     version: recommended
 
 # ─── Logging ────────────────────────────────────────────────────────────────
+# The PHNIX protocol codec (CRC, Modbus frame builders, notification decoder)
+# lives in a small, host-unit-tested C++ library shipped as an ESPHome external
+# component. It is fetched from GitHub at compile time — no local files needed.
+# Pin the ref with the `phnix_components_ref` substitution (defaults to `main`;
+# testers point it at a feature branch).
+external_components:
+  - source:
+      type: git
+      url: https://github.com/a-teece/thermotec-mini-heat-pump-home-assistant-integration
+      ref: ${phnix_components_ref}
+    components: [phnix]
+    refresh: 1d
+
+# Library-only component — no configuration. Compiles the codec into the
+# firmware and exposes its headers to the lambdas below.
+phnix:
+
 logger:
   level: INFO
   baud_rate: 115200
@@ -836,16 +860,17 @@ sensor:
         return {};
       }
 
-      // Data block (fragmented read response).
-      // Format: 63 10 [block_hi] [block_lo] 00 2D 5A [9 regs of data...]
-      if (x[1] != 0x10 || x.size() < 9) return {};
-
-      uint16_t block = (x[2] << 8) | x[3];
-      auto rd = [&](size_t i) -> int16_t {
-        size_t p = 7 + i * 2;
-        if (p + 1 >= x.size()) return 0;
-        return (int16_t)((x[p] << 8) | x[p+1]);
-      };
+      // Data block (fragmented read response). Validate the header *and CRC*
+      // via the phnix codec, then read registers through the validated view —
+      // corrupt or short frames are now dropped rather than mis-parsed.
+      phnix::BlockView view = phnix::parse_block(x);
+      if (!view.valid) {
+        ESP_LOGW("heatpump", "Ignoring invalid/short block frame (%u bytes)",
+                 (unsigned) x.size());
+        return {};
+      }
+      uint16_t block = view.block_addr;
+      auto rd = [&](size_t i) -> int16_t { return (int16_t) view.reg(i); };
 
       if (block == 0x07FE) {
         // Sensor failure detection. The heat pump signals different
@@ -1295,20 +1320,10 @@ text_sensor:
         result += s;
       };
 
-      // E-codes from error register (bitmask at 0x07F2)
+      // E-codes from error register (bitmask at 0x07F2), decoded by the codec.
       if (id(error_code).has_state()) {
-        uint16_t code = (uint16_t)(int)id(error_code).state;
-        // Confirmed/inferred mappings on this model:
-        if (code & 0x0001) append("E01 High pressure protection");  // bit 0 — inferred
-        if (code & 0x0002) append("E02 Low pressure protection");   // bit 1 — confirmed
-        if (code & 0x0004) append("E03 No water flow");              // bit 2 — confirmed
-        uint16_t known = 0x0007;
-        uint16_t unknown = code & ~known;
-        if (unknown) {
-          char buf[40];
-          snprintf(buf, sizeof(buf), "E-unknown bits 0x%04X", unknown);
-          append(buf);
-        }
+        std::string e = phnix::error_text((uint16_t)(int) id(error_code).state);
+        if (!e.empty()) append(e);
       }
 
       // P-codes from temperature sensor failures
@@ -1373,7 +1388,7 @@ script:
           id: heatpump_ble
           service_uuid: ${service_uuid}
           characteristic_uuid: ${write_char_uuid}
-          value: [0x63, 0x03, 0x00, 0x07, 0x00, 0x2D, 0x3C, 0x54]
+          value: !lambda 'return phnix::build_read_all();'
 
   # Write a new target temperature to the register appropriate to the
   # current operating mode:
@@ -1393,16 +1408,15 @@ script:
           service_uuid: ${service_uuid}
           characteristic_uuid: ${write_char_uuid}
           value: !lambda |-
-            // Pick the right register based on current mode
+            // Route to the register for the current mode (default Heat before
+            // the first poll). The codec selects the register; the firmware
+            // still owns range-clamping since the limits come from the device.
             std::string mode_str = id(current_mode).has_state()
                                    ? id(current_mode).state
                                    : std::string("Heat");
-            uint8_t addr_hi = 0x04, addr_lo = 0x16;  // default: heat
-            if (mode_str == "Cool") {
-              addr_hi = 0x04; addr_lo = 0x1B;
-            } else if (mode_str == "Auto") {
-              addr_hi = 0x04; addr_lo = 0x2C;
-            }
+            phnix::Mode m = (mode_str == "Cool") ? phnix::Mode::Cool
+                          : (mode_str == "Auto") ? phnix::Mode::Auto
+                                                 : phnix::Mode::Heat;
 
             // Clamp to the mode-appropriate range
             if (mode_str == "Cool") {
@@ -1414,22 +1428,9 @@ script:
               if (temp_x10 > 400) temp_x10 = 400;   // R05 Max heat = 40°C
             }
 
-            std::vector<uint8_t> msg = {
-              0x63, 0x10, addr_hi, addr_lo, 0x00, 0x01, 0x02,
-              (uint8_t)((temp_x10 >> 8) & 0xFF),
-              (uint8_t)(temp_x10 & 0xFF)
-            };
-            uint16_t crc = 0xFFFF;
-            for (auto b : msg) {
-              crc ^= b;
-              for (int j = 0; j < 8; j++)
-                crc = (crc & 1) ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
-            }
-            msg.push_back(crc & 0xFF);
-            msg.push_back((crc >> 8) & 0xFF);
-            ESP_LOGI("heatpump", "Set %s target = %.1f (reg 0x%02X%02X)",
-                     mode_str.c_str(), temp_x10 / 10.0, addr_hi, addr_lo);
-            return msg;
+            ESP_LOGI("heatpump", "Set %s target = %.1f",
+                     mode_str.c_str(), temp_x10 / 10.0);
+            return phnix::build_set_target(m, temp_x10 / 10.0f);
 
   # Reconcile the heat pump's target temperature with the desired (HA helper)
   # value, with verification and retry — same pattern as sync_power_state.
@@ -1498,21 +1499,8 @@ script:
           service_uuid: ${service_uuid}
           characteristic_uuid: ${write_char_uuid}
           value: !lambda |-
-            uint8_t val = power_on ? 0x01 : 0x00;
-            std::vector<uint8_t> msg = {
-              0x63, 0x10, 0x03, 0xF3, 0x00, 0x01, 0x02, 0x00, val
-            };
-            // CRC16 (Modbus RTU)
-            uint16_t crc = 0xFFFF;
-            for (auto b : msg) {
-              crc ^= b;
-              for (int j = 0; j < 8; j++)
-                crc = (crc & 1) ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
-            }
-            msg.push_back(crc & 0xFF);
-            msg.push_back((crc >> 8) & 0xFF);
             ESP_LOGI("heatpump", "Set power = %s", power_on ? "ON" : "OFF");
-            return msg;
+            return phnix::build_power(power_on);
 
   # Reconcile the heat pump's power state with the desired (HA helper) state,
   # with verification and retry. A single BLE write to 0x03F3 is occasionally
@@ -1591,38 +1579,13 @@ script:
           service_uuid: ${service_uuid}
           characteristic_uuid: ${write_char_uuid}
           value: !lambda |-
-            // Translate string mode to (mode_val, second_reg) pair.
-            // The second register's exact meaning is unknown but the values
-            // below match what the official AquaTemp app sends.
-            // Note: 0x00 = Cool, 0x01 = Heat, 0x02 = Auto (confirmed by observation).
-            uint8_t mode_lo, sec_hi, sec_lo;
-            if (mode == "Heat") {
-              mode_lo = 0x01; sec_hi = 0x00; sec_lo = 0x88;
-            } else if (mode == "Cool") {
-              mode_lo = 0x00; sec_hi = 0x00; sec_lo = 0x00;
-            } else if (mode == "Auto") {
-              mode_lo = 0x02; sec_hi = 0x00; sec_lo = 0x8C;
-            } else {
-              // Default to Heat for any unrecognised string
-              mode_lo = 0x01; sec_hi = 0x00; sec_lo = 0x88;
-            }
-
-            std::vector<uint8_t> msg = {
-              0x63, 0x10, 0x03, 0xF4, 0x00, 0x02, 0x04,
-              0x00, mode_lo,
-              sec_hi, sec_lo
-            };
-            // CRC16 (Modbus RTU)
-            uint16_t crc = 0xFFFF;
-            for (auto b : msg) {
-              crc ^= b;
-              for (int j = 0; j < 8; j++)
-                crc = (crc & 1) ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
-            }
-            msg.push_back(crc & 0xFF);
-            msg.push_back((crc >> 8) & 0xFF);
+            // The codec writes both registers (0x03F4 mode + 0x03F5 companion)
+            // exactly as the app does. Unrecognised strings default to Heat.
+            phnix::Mode m = (mode == "Cool") ? phnix::Mode::Cool
+                          : (mode == "Auto") ? phnix::Mode::Auto
+                                             : phnix::Mode::Heat;
             ESP_LOGI("heatpump", "Set mode = %s", mode.c_str());
-            return msg;
+            return phnix::build_mode(m);
 
   # Reconcile the heat pump's operating mode with the desired (HA helper)
   # value, with verification and retry — same pattern as sync_power_state.

@@ -43,6 +43,13 @@ substitutions:
   # home_assistant_desired_target_temp_number_name: input_number.pool_target_temperature
   # home_assistant_desired_mode_select_name: input_select.pool_heater_mode
 
+  # ── Protocol component version (optional) ─────────────────────────────────
+  # The firmware pulls a small protocol codec (`phnix`) from this same repo via
+  # `external_components`. Keep it on the SAME ref as the package `ref:` below
+  # (both default to `main`). Override only when testing a feature branch — set
+  # it to the same branch name you point `ref:` at:
+  # phnix_components_ref: main
+
   # ── Sleep schedule (optional) ─────────────────────────────────────────────
   # deep_sleep_duration_day: 5min
   # deep_sleep_duration_night: 15min
@@ -64,3 +71,6 @@ packages:
     ref: main                       # see "CHOOSING A VERSION" above
     files: [pool-heatpump-proxy.yaml]
     refresh: 1d                      # how often to re-check GitHub for updates
+    # NOTE: if you change `ref:` away from `main`, also set the
+    # `phnix_components_ref` substitution above to the same value, so the
+    # protocol component is fetched from the matching ref.

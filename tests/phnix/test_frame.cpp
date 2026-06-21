@@ -4,8 +4,8 @@
 // from the reference unit (Protocol.md §5 / Appendix A). These are the
 // hard-won, verified-on-hardware sequences — the builders must reproduce them
 // exactly, CRC included.
-#include "phnix/crc.h"
-#include "phnix/frame.h"
+#include "crc.h"
+#include "frame.h"
 #include "test_framework.h"
 
 using namespace phnix;

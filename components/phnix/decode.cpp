@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "phnix/decode.h"
+#include "decode.h"
 
-#include "phnix/crc.h"
+#include <cstdio>
+
+#include "crc.h"
 
 namespace phnix {
 
@@ -46,6 +48,25 @@ std::string error_description(uint16_t error_reg) {
   for (const auto &c : active_error_codes(error_reg)) {
     if (!out.empty()) out += ", ";
     out += c;
+  }
+  return out;
+}
+
+std::string error_text(uint16_t error_reg) {
+  std::string out;
+  auto append = [&](const std::string &s) {
+    if (!out.empty()) out += "; ";
+    out += s;
+  };
+  if (error_reg & kErrE01) append("E01 High pressure protection");
+  if (error_reg & kErrE02) append("E02 Low pressure protection");
+  if (error_reg & kErrE03) append("E03 No water flow");
+  uint16_t unknown =
+      error_reg & ~static_cast<uint16_t>(kErrE01 | kErrE02 | kErrE03);
+  if (unknown) {
+    char buf[40];
+    snprintf(buf, sizeof buf, "E-unknown bits 0x%04X", unknown);
+    append(buf);
   }
   return out;
 }
