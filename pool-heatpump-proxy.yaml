@@ -1451,17 +1451,25 @@ script:
   # so both the on_connect reconcile AND every immediate control change
   # (Power / Mode / Target) must funnel through this one sequence rather than
   # firing their own sync_* concurrently. mode: restart coalesces rapid changes
-  # (e.g. dragging the target slider) to just the latest values. Mode is synced
-  # first so the target then lands in the now-current mode's register.
+  # (e.g. dragging the target slider) to just the latest values.
+  #
+  # Order: POWER first, then MODE, then TARGET.
+  #   * Power first so the unit is on (and accepting writes) before we change
+  #     mode/setpoint — some units reject those while off, which would
+  #     otherwise silently fail until the next reconcile. When power isn't
+  #     changing this is an instant no-op, so it only adds time on a real
+  #     power-on — exactly when you'd want to wait for "on" anyway.
+  #   * Mode before target because the target's register is mode-dependent, so
+  #     the setpoint must land in the now-current mode's register.
   - id: sync_all_settings
     mode: restart
     then:
+      - script.execute: sync_power_state
+      - script.wait: sync_power_state
       - script.execute: sync_mode
       - script.wait: sync_mode
       - script.execute: sync_target_temp
       - script.wait: sync_target_temp
-      - script.execute: sync_power_state
-      - script.wait: sync_power_state
 
   # Send the Modbus "read all status" command to the heat pump.
   # The heat pump replies with 4 fragmented notifications covering blocks
