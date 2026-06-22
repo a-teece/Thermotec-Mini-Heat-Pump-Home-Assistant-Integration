@@ -717,7 +717,7 @@ select:
             - logger.log:
                 level: INFO
                 format: "Mode set to %s — syncing to heat pump"
-                args: ['id(desired_mode).state.c_str()']
+                args: ['id(desired_mode).current_option().c_str()']
             - script.execute: sync_mode
             - script.wait: sync_mode
             # Push the desired target into the now-current mode's register so
@@ -1671,31 +1671,31 @@ script:
                     if (id(mode_sync_attempts) >= 3) return false;
                     // No reading yet — loop so we write and poll to get one.
                     if (!id(current_mode).has_state()) return true;
-                    return id(desired_mode).state != id(current_mode).state;
+                    return id(desired_mode).current_option() != id(current_mode).state;
                 then:
                   - lambda: 'id(mode_sync_attempts) += 1;'
                   - logger.log:
                       level: INFO
                       format: "Syncing mode (attempt %d/3): HA=%s"
                       args: ['id(mode_sync_attempts)',
-                             'id(desired_mode).state.c_str()']
+                             'id(desired_mode).current_option().c_str()']
                   - script.execute:
                       id: write_mode
-                      mode: !lambda 'return id(desired_mode).state;'
+                      mode: !lambda 'return id(desired_mode).current_option();'
                   - delay: 2s
                   - script.execute: poll_heat_pump
                   - delay: 3s
             - lambda: |-
                 bool synced = id(current_mode).has_state() &&
-                              id(desired_mode).state == id(current_mode).state;
+                              id(desired_mode).current_option() == id(current_mode).state;
                 if (synced) {
                   ESP_LOGI("heatpump", "Mode confirmed: %s",
-                           id(desired_mode).state.c_str());
+                           id(desired_mode).current_option().c_str());
                 } else {
                   ESP_LOGW("heatpump",
                            "Mode NOT confirmed after %d attempts (HA=%s) — "
                            "will retry on next reconcile",
-                           id(mode_sync_attempts), id(desired_mode).state.c_str());
+                           id(mode_sync_attempts), id(desired_mode).current_option().c_str());
                 }
 
   # Choose the correct deep sleep duration based on the current time of day,
