@@ -525,6 +525,14 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  # Disable WiFi modem power-save. The ESP32 default is LIGHT (modem sleeps
+  # between DTIM beacons), which delays MQTT keepalive/TCP packets and — with
+  # BLE sharing the radio on the single-core C6 — causes the broker connection
+  # to drop and re-establish (the "mqtt cleared Warning flag" cycle), so
+  # commands changed in HA only land when it reconnects. NONE keeps MQTT solid.
+  # Negligible battery cost: in deep-sleep mode the device is only awake briefly
+  # each cycle; the real saving is the sleep itself.
+  power_save_mode: none
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: ${device_name}
