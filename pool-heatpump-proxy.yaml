@@ -1621,10 +1621,14 @@ script:
                       power_on: !lambda 'return id(desired_power_state).state;'
                   # Let the write apply, then re-poll and wait for the notify
                   # response so current_power_state reflects reality before the
-                  # while condition re-evaluates.
+                  # while condition re-evaluates. The heat pump can take ~10-15s
+                  # to report a power change back in register 0x03F3, so this
+                  # settle is longer than mode/target's — too short and the
+                  # confirm check gives up (false "NOT confirmed") before the
+                  # pump has reported the change it already accepted (ACK'd).
                   - delay: 2s
                   - script.execute: poll_heat_pump
-                  - delay: 3s
+                  - delay: 6s
             # Report the outcome so the logs make a failure obvious.
             - lambda: |-
                 bool synced = id(current_power_state).has_state() &&
