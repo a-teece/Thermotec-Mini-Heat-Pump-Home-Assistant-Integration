@@ -6,9 +6,8 @@
 #  wifi_password: "your WiFi network key"
 #  ap_fallback_password: "a strong password for the fallback WiFi hotspot, e.g. my_secure_fallback_password"
 #  ota_password: "a strong password for OTA updates, e.g. my_very_secure_password"
-#  pool_heatpump_proxy_api_key: "a random 16-byte hex string for API encryption, e.g. 0123456789abcdef0123456789abcdef"
 #  pool_heatpump_proxy_device_mac_address: "your heat pump's BLE MAC address, e.g. AA:BB:CC:DD:EE:FF"
-#  mqtt_broker: "your MQTT broker host, e.g. homeassistant.local or 192.168.1.x"  # (MQTT transition — see CHANGELOG)
+#  mqtt_broker: "your MQTT broker host, e.g. homeassistant.local or 192.168.1.x"
 #  mqtt_username: "your MQTT broker username"
 #  mqtt_password: "your MQTT broker password"
 
@@ -34,42 +33,15 @@ substitutions:
   write_char_uuid: "0000ff03-0000-1000-8000-00805f9b34fb"
   notify_char_uuid: "0000ff02-0000-1000-8000-00805f9b34fb"
 
-  # So that we can update values in Home Assistant while this device is asleep,
-  # we use some Home Assistant helpers.
-  # Create them in HA "Settings → Devices & Services → Helpers → Create".
-  # Suggested name/id. If the name changes, update the `entity_id` below to match.
-
-  #  Type: Toggle helper (aka input_boolean)
-  #  Name: Pool Heater Prevent Deep Sleep
-  #  Entity ID: input_boolean.pool_heater_prevent_deep_sleep
-  home_assistant_prevent_deep_sleep_switch_name: input_boolean.pool_heater_prevent_deep_sleep
-
-  #  Type: Toggle helper (aka input_boolean)
-  #  Name: Pool Heater Power
-  #  Entity ID: input_boolean.pool_heater_power
-  home_assistant_desired_power_state_switch_name: input_boolean.pool_heater_power
-
-  #  Type: Number (aka input_number)
-  #  Name: Pool Target Temperature
-  #  Entity ID: input_number.pool_target_temperature
-  #  Minimum: 15
-  #  Maximum: 40
-  #  Step: 0.5
-  #  Unit: °C
-  #  Display: Slider
-  home_assistant_desired_target_temp_number_name: input_number.pool_target_temperature
-
-  #  Type: Dropdown (aka input_select)
-  #  Name: Pool Heater Mode
-  #  Entity ID: input_select.pool_heater_mode
-  #  Options: Heat, Cool, Auto
-  home_assistant_desired_mode_select_name: input_select.pool_heater_mode
+  # Control entities (Power, Mode, Target Temperature, Prevent Deep Sleep) are
+  # published to Home Assistant via MQTT discovery — there are no HA helpers or
+  # template entities to create. See the control entities further down.
 
   # Permanently enable ("true") or disable ("false") deep sleep.
   # "false" = always-on mode: the device never sleeps and polls continuously
   # (every 30 s) — intended for mains/USB-powered installs where battery life
   # isn't a concern. This is a build-time choice and overrides the runtime
-  # "Prevent Deep Sleep" helper. Leave "true" for battery operation.
+  # "Prevent Deep Sleep" switch. Leave "true" for battery operation.
   enable_deep_sleep: "true"
 
   # Sleep duration during "day" hours (between day_start_hour and day_end_hour).
@@ -86,7 +58,7 @@ substitutions:
   # day_start_hour: device uses deep_sleep_duration_day from this hour onward.
   # day_end_hour:   device switches back to deep_sleep_duration_night at this hour.
   # Example: "9" and "18" = 09:00–17:59 day mode, 18:00–08:59 night mode.
-  # Has no effect if Pool Heater Prevent Deep Sleep is on (USB / always-on mode).
+  # Has no effect if the Prevent Deep Sleep switch is on (USB / always-on mode).
   day_start_hour: "9"
   day_end_hour: "18"
 
@@ -725,8 +697,8 @@ select:
                 level: INFO
                 format: "Mode set to %s — syncing to heat pump"
                 args: ['id(desired_mode).current_option().c_str()']
-            # Serialised apply (mode → target → power); mode-first carries the
-            # target into the now-current mode's register.
+            # Serialised apply (power → mode → target); mode-before-target
+            # carries the setpoint into the now-current mode's register.
             - script.execute: sync_all_settings
 
 number:

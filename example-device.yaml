@@ -35,17 +35,10 @@ substitutions:
   device_name: pool-heatpump-proxy
   friendly_name: Pool Heatpump Proxy
 
-  # ── Home Assistant helper entity IDs ──────────────────────────────────────
-  # Only override these if you created your HA helpers with different IDs.
-  # See the README § "Create Home Assistant helpers".
-  # home_assistant_prevent_deep_sleep_switch_name: input_boolean.pool_heater_prevent_deep_sleep
-  # home_assistant_desired_power_state_switch_name: input_boolean.pool_heater_power
-  # home_assistant_desired_target_temp_number_name: input_number.pool_target_temperature
-  # home_assistant_desired_mode_select_name: input_select.pool_heater_mode
-
   # ── MQTT (port only) ──────────────────────────────────────────────────────
-  # The device talks to Home Assistant over MQTT. The broker host and
-  # credentials go in secrets.yaml (`mqtt_broker`, `mqtt_username`,
+  # The device talks to Home Assistant over MQTT and publishes its own entities
+  # via discovery — no HA helpers or template entities to create. The broker
+  # host and credentials go in secrets.yaml (`mqtt_broker`, `mqtt_username`,
   # `mqtt_password`) — nothing to set here. Only override the port for a
   # non-standard broker port (default 1883):
   # mqtt_port: "1883"

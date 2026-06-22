@@ -24,43 +24,73 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+- Internal tidy-up (no user impact): retire the snapshot-to-globals machinery
+  now that MQTT's retained state topics keep Home Assistant populated across
+  deep sleep, and rework the deep-sleep enable so a fresh install boots awake.
+
+## [v2.0.0] - 2026-06-22
+
+**Breaking change.** Home Assistant integration is now over **MQTT** instead of
+the ESPHome native API. You must have an MQTT broker (e.g. the Home Assistant
+Mosquitto add-on), and the four manually-created HA helpers + template entities
+are no longer used — the device publishes its own entities via MQTT discovery.
+See **"Upgrading from v1.x"** in the README for the (short) migration.
+
+### Changed
+
+- **MQTT replaces the native API as the sole Home Assistant transport.** The
+  device connects to an MQTT broker with Home Assistant discovery, tuned for
+  battery/deep-sleep operation: `reboot_timeout: 0s` (a transient broker outage
+  never resets the device) and `discovery_retain` (HA re-discovers entities
+  after a restart without waiting for a wake). `time:` switched from the API to
+  `sntp`. Connection details live in `secrets.yaml` (`mqtt_broker`,
+  `mqtt_username`, `mqtt_password`) so deployment needs no device-file edits;
+  `mqtt_port` is an optional substitution (default `1883`).
+- **The control surface is now device-native.** A **Power** switch, **Mode**
+  select, **Target Temperature** number and **Prevent Deep Sleep** switch are
+  published via MQTT discovery and appear in HA automatically — no `input_*`
+  helpers or `configuration.yaml` template entities to create. Their command
+  topics are **retained** (`command_retain`), so a change made while the device
+  sleeps is delivered on its next connect (the retained command is the
+  desired-state store that the helpers used to be); each also restores its last
+  value from flash on boot. The verified `sync_*` reconcile scripts are
+  unchanged.
+- **Target Temperature** renders as a slider **and** an input box (`mode: auto`)
+  on the HA device page.
+
 ### Added
-- **MQTT transport (start of the v2.0.0 MQTT transition).** The device now
-  connects to an MQTT broker with Home Assistant discovery, tuned for
-  battery/deep-sleep operation with `reboot_timeout: 0s` (no reset on a
-  transient broker outage) and `discovery_retain`. Connection details live in
-  `secrets.yaml` (`mqtt_broker`, `mqtt_username`, `mqtt_password`) so deployment
-  needs no device-file edits; `mqtt_port` is an optional substitution (default
-  1883). (Retaining *control commands* across sleep — via per-entity
-  `command_retain` — lands in the stage that introduces the discovered control
-  entities.)
+
 - **`enable_deep_sleep` substitution (default `"true"`)** — set to `"false"` to
   permanently disable deep sleep at build time for mains/USB-powered installs.
   The device then stays awake and polls every 30 s, with no dependence on the
-  runtime *Prevent Deep Sleep* helper (the build-time setting also overrides
-  that helper, so it can't force a sleep). Backwards-compatible: the default
-  preserves the existing battery deep-sleep behaviour.
+  runtime *Prevent Deep Sleep* switch (the build-time setting also overrides
+  it, so it can't force a sleep). The default preserves battery deep-sleep
+  behaviour.
 
-### In progress (v2.0.0, breaking — not yet complete)
-Replacing the native API with MQTT, in stages validated incrementally.
-- **Stage 1 (done):** MQTT transport + discovery.
-- **Stage 2a (done):** the control surface is now **device-native** — a Power
-  switch, Mode select, Target number and Prevent Deep Sleep switch, published
-  via MQTT discovery with `command_retain` (desired value survives deep sleep)
-  and restored from flash on boot. These replace the HA `input_*` helpers +
-  `platform: homeassistant` mirrors; the verified `sync_*` reconcile scripts are
-  unchanged. **No manual HA helpers needed.**
-- **Stage 2b-1 (done):** **`api:` removed — MQTT is now the sole transport.**
-  `time:` switched to `sntp` (no API dependency); `on_boot` waits on the MQTT
-  broker (then a short settle for retained commands) instead of the API. HA
-  no longer shows duplicate entities.
-- **Stage 2b-2 (remaining):** delete the now-redundant snapshot-to-globals
-  machinery — MQTT's retained state topics keep HA populated across deep sleep,
-  so the snapshot/restore globals, `on_boot` Phase 0 republish, and the
-  pre-sleep flash-sync delay are no longer needed.
+### Fixed
 
-When complete this is a **MAJOR** release: it requires an MQTT broker and
-changes the Home Assistant setup (no more manual helpers).
+- **MQTT connection no longer drops/reconnects in a loop** ("cleared Warning
+  flag" in the log) — WiFi power-save is disabled (`power_save_mode: none`),
+  which the broker keep-alive needs.
+- **Simultaneous control changes no longer collide.** Power, mode and target
+  writes are serialised and applied **power → mode → target**, so two changes
+  made together can't both grab the single BLE write characteristic and drop a
+  write. Power-first ensures the pump is on before mode/target are pushed.
+- **Power toggle could write the stale (pre-toggle) state** — the optimistic
+  switch fired its action before committing the new value; a brief settle now
+  lets the new state land first.
+- **Longer confirm settle when verifying a power change**, to accommodate the
+  heat pump's slow readback of the power register.
+
+### Removed
+
+- **The `pool_heatpump_proxy_api_key` secret and the manual HA helper/template
+  setup are no longer needed.** (The API key was for native-API encryption;
+  the helpers and `configuration.yaml` template entities are replaced by the
+  MQTT-discovered controls.)
+- The four `home_assistant_*_name` substitutions (which named the old HA
+  helpers) have been removed — the device owns these entities now, so there's
+  nothing to point at.
 
 ## [v1.1.0] - 2026-06-21
 
