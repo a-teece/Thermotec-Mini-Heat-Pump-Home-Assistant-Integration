@@ -665,6 +665,12 @@ switch:
           condition:
             lambda: 'return id(ble_connected);'
           then:
+            # The optimistic switch fires this action BEFORE it commits the new
+            # .state (write_state triggers, then publishes), so sync_power_state
+            # would read the stale pre-toggle value and write the wrong power.
+            # A brief delay lets the new state land first. (Number/select are
+            # Call-based and commit before their action, so they don't need it.)
+            - delay: 250ms
             - logger.log:
                 level: INFO
                 format: "Power set ON — syncing to heat pump"
@@ -674,6 +680,7 @@ switch:
           condition:
             lambda: 'return id(ble_connected);'
           then:
+            - delay: 250ms   # see turn_on_action: let .state commit before sync
             - logger.log:
                 level: INFO
                 format: "Power set OFF — syncing to heat pump"
