@@ -6,8 +6,10 @@
 #  wifi_password: "your WiFi network key"
 #  ap_fallback_password: "a strong password for the fallback WiFi hotspot, e.g. my_secure_fallback_password"
 #  ota_password: "a strong password for OTA updates, e.g. my_very_secure_password"
-#  pool_heatpump_proxy_api_key: "a random 16-byte hex string for API encryption, e.g. 0123456789abcdef0123456789abcdef"
 #  pool_heatpump_proxy_device_mac_address: "your heat pump's BLE MAC address, e.g. AA:BB:CC:DD:EE:FF"
+#  mqtt_broker: "your MQTT broker host, e.g. homeassistant.local or 192.168.1.x"
+#  mqtt_username: "your MQTT broker username"
+#  mqtt_password: "your MQTT broker password"
 
 # ─── Globals ────────────────────────────────────────────────────────────────
 substitutions:
@@ -20,46 +22,26 @@ substitutions:
   # set in your device file.
   phnix_components_ref: main
 
+  # MQTT broker port (the device's Home Assistant transport — see CHANGELOG /
+  # the v2.0.0 MQTT transition). The broker host and credentials live in
+  # secrets.yaml (mqtt_broker / mqtt_username / mqtt_password) so the whole
+  # connection is configured in one place without editing this file; only
+  # override the port here for a non-standard broker port.
+  mqtt_port: "1883"
+
   service_uuid: "0000ff01-0000-1000-8000-00805f9b34fb"
   write_char_uuid: "0000ff03-0000-1000-8000-00805f9b34fb"
   notify_char_uuid: "0000ff02-0000-1000-8000-00805f9b34fb"
 
-  # So that we can update values in Home Assistant while this device is asleep,
-  # we use some Home Assistant helpers.
-  # Create them in HA "Settings → Devices & Services → Helpers → Create".
-  # Suggested name/id. If the name changes, update the `entity_id` below to match.
-
-  #  Type: Toggle helper (aka input_boolean)
-  #  Name: Pool Heater Prevent Deep Sleep
-  #  Entity ID: input_boolean.pool_heater_prevent_deep_sleep
-  home_assistant_prevent_deep_sleep_switch_name: input_boolean.pool_heater_prevent_deep_sleep
-
-  #  Type: Toggle helper (aka input_boolean)
-  #  Name: Pool Heater Power
-  #  Entity ID: input_boolean.pool_heater_power
-  home_assistant_desired_power_state_switch_name: input_boolean.pool_heater_power
-
-  #  Type: Number (aka input_number)
-  #  Name: Pool Target Temperature
-  #  Entity ID: input_number.pool_target_temperature
-  #  Minimum: 15
-  #  Maximum: 40
-  #  Step: 0.5
-  #  Unit: °C
-  #  Display: Slider
-  home_assistant_desired_target_temp_number_name: input_number.pool_target_temperature
-
-  #  Type: Dropdown (aka input_select)
-  #  Name: Pool Heater Mode
-  #  Entity ID: input_select.pool_heater_mode
-  #  Options: Heat, Cool, Auto
-  home_assistant_desired_mode_select_name: input_select.pool_heater_mode
+  # Control entities (Power, Mode, Target Temperature, Prevent Deep Sleep) are
+  # published to Home Assistant via MQTT discovery — there are no HA helpers or
+  # template entities to create. See the control entities further down.
 
   # Permanently enable ("true") or disable ("false") deep sleep.
   # "false" = always-on mode: the device never sleeps and polls continuously
   # (every 30 s) — intended for mains/USB-powered installs where battery life
   # isn't a concern. This is a build-time choice and overrides the runtime
-  # "Prevent Deep Sleep" helper. Leave "true" for battery operation.
+  # "Prevent Deep Sleep" switch. Leave "true" for battery operation.
   enable_deep_sleep: "true"
 
   # Sleep duration during "day" hours (between day_start_hour and day_end_hour).
@@ -76,7 +58,7 @@ substitutions:
   # day_start_hour: device uses deep_sleep_duration_day from this hour onward.
   # day_end_hour:   device switches back to deep_sleep_duration_night at this hour.
   # Example: "9" and "18" = 09:00–17:59 day mode, 18:00–08:59 night mode.
-  # Has no effect if Pool Heater Prevent Deep Sleep is on (USB / always-on mode).
+  # Has no effect if the Prevent Deep Sleep switch is on (USB / always-on mode).
   day_start_hour: "9"
   day_end_hour: "18"
 
@@ -108,6 +90,14 @@ globals:
   # Used by on_boot to wait until connected before sleeping.
   # NOT restored — BLE state from a previous wake cycle is meaningless.
   - id: ble_connected
+    type: bool
+    initial_value: 'false'
+    restore_value: no
+
+  # Tracks whether the MQTT broker connection is up (set from mqtt on_connect/
+  # on_disconnect). on_boot waits on this before reconciling — the role
+  # api.connected used to play.
+  - id: mqtt_connected
     type: bool
     initial_value: 'false'
     restore_value: no
@@ -365,17 +355,18 @@ esphome:
                 if (id(g_master_ver)[0])  id(master_program_version).publish_state(std::string(id(g_master_ver)));
                 if (id(g_soft_code)[0])   id(main_control_software_code).publish_state(std::string(id(g_soft_code)));
 
-      # ── Phase 1: Wait for the HA API ────────────────────────────────────
-      # We need the API to read the prevent-sleep helper and the desired
-      # target temp helper. Without it we'd risk sleeping when we shouldn't.
+      # ── Phase 1: Wait for the MQTT broker ───────────────────────────────
+      # We need the broker up so it can re-deliver the retained control
+      # commands (desired power/mode/target) before we decide whether to sleep.
       - wait_until:
           condition:
-            api.connected:
+            lambda: 'return id(mqtt_connected);'
           timeout: 15s
 
-      # ── Phase 2: Give HA a moment to push helper states ─────────────────
-      # After the API connects, HA sends the current values of mirrored
-      # helpers. A short delay ensures they've arrived before we read them.
+      # ── Phase 2: Let the broker deliver retained commands ───────────────
+      # On (re)connect the broker re-sends the retained command topics; a short
+      # delay ensures the desired_* controls reflect any value changed while we
+      # were asleep before the on_connect reconcile reads them.
       - delay: 2s
 
       # ── Phase 3: Decide between awake mode and a sleep cycle ────────────
@@ -384,7 +375,7 @@ esphome:
             # Stay awake if the runtime helper says so, OR if deep sleep is
             # disabled at build time (enable_deep_sleep: "false" → always-on).
             or:
-              - binary_sensor.is_on: prevent_deep_sleep_switch
+              - switch.is_on: prevent_deep_sleep_switch
               - lambda: 'return !(${enable_deep_sleep});'
           then:
             # ── AWAKE MODE: stay on (always-on build, OTA, debugging) ───
@@ -472,9 +463,31 @@ logger:
     sensor: WARN
 
 # ─── Home Assistant API ─────────────────────────────────────────────────────
-api:
-  encryption:
-    key: !secret pool_heatpump_proxy_api_key
+# ─── MQTT (Home Assistant transport) ────────────────────────────────────────
+# Home Assistant transport via an MQTT broker (e.g. the Mosquitto add-on).
+# Key settings for a battery / deep-sleep device:
+#   * reboot_timeout 0s — never reboot just because the broker is briefly
+#     unreachable; the device would otherwise reset mid-cycle on a blip.
+#   * discovery — auto-creates the HA entities, so no manual helpers/templates.
+#   * discovery_retain — HA re-discovers entities after a restart without the
+#     (sleeping) device needing to be online to republish.
+# Home Assistant retains *control commands* (so a value changed while the device
+# sleeps is applied on the next wake) via the per-entity `command_retain: true`
+# set on each control switch/number/select — see the Control entities section.
+mqtt:
+  broker: !secret mqtt_broker
+  port: ${mqtt_port}
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  discovery: true
+  discovery_retain: true
+  reboot_timeout: 0s
+  # Track connection state so on_boot can wait for the broker before deciding
+  # whether to sleep (the API's api.connected role, now MQTT's).
+  on_connect:
+    - lambda: 'id(mqtt_connected) = true;'
+  on_disconnect:
+    - lambda: 'id(mqtt_connected) = false;'
 
 ota:
   - platform: esphome
@@ -484,6 +497,14 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  # Disable WiFi modem power-save. The ESP32 default is LIGHT (modem sleeps
+  # between DTIM beacons), which delays MQTT keepalive/TCP packets and — with
+  # BLE sharing the radio on the single-core C6 — causes the broker connection
+  # to drop and re-establish (the "mqtt cleared Warning flag" cycle), so
+  # commands changed in HA only land when it reconnects. NONE keeps MQTT solid.
+  # Negligible battery cost: in deep-sleep mode the device is only awake briefly
+  # each cycle; the real saving is the sleep itself.
+  power_save_mode: none
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: ${device_name}
@@ -492,18 +513,18 @@ wifi:
 captive_portal:
 
 # ─── Time ───────────────────────────────────────────────────────────────────
-# Sync from HA over the API. Required for the last_connected text sensor
-# to display a human-readable wake timestamp.
+# SNTP (NTP) — no API dependency. Required for the last_connected text sensor
+# and the day/night sleep schedule. id kept as ha_time (referenced elsewhere).
 time:
-  - platform: homeassistant
+  - platform: sntp
     id: ha_time
     on_time_sync:
       then:
-        # Stamp the Last Connected heartbeat as soon as HA time is available.
-        # This fires shortly after the API connects on every boot/reconnect,
-        # in BOTH sleep and prevent-deep-sleep mode. Without it, the awake
-        # (prevent-sleep) branch of on_boot never publishes last_connected at
-        # all — leaving it stuck at 'unknown' the whole debug session.
+        # Stamp the Last Connected heartbeat as soon as the clock is set.
+        # Fires shortly after NTP sync on every boot/reconnect, in BOTH sleep
+        # and prevent-deep-sleep mode. Without it, the awake (prevent-sleep)
+        # branch of on_boot never publishes last_connected at all — leaving it
+        # stuck at 'unknown' the whole debug session.
         #
         # We write the formatted timestamp into the retained global (not just
         # the sensor) so Phase 0 of on_boot can republish it on the next wake
@@ -572,17 +593,9 @@ ble_client:
         # FIRST so that the target then lands in the (now correct) active
         # mode's register, carrying the setpoint across a mode change.
 
-        # ── Mode ──
-        - script.execute: sync_mode
-        - script.wait: sync_mode
-
-        # ── Target temp ──
-        - script.execute: sync_target_temp
-        - script.wait: sync_target_temp
-
-        # ── Power State ──
-        - script.execute: sync_power_state
-        - script.wait: sync_power_state
+        # ── Reconcile all settings (serialised — see sync_all_settings) ──
+        - script.execute: sync_all_settings
+        - script.wait: sync_all_settings
 
         # Reconcile finished — on_boot may now proceed to deep sleep.
         - lambda: 'id(reconcile_done) = true;'
@@ -592,64 +605,129 @@ ble_client:
         - logger.log: "Heat pump disconnected"
         - lambda: 'id(ble_connected) = false;'
 
+# ─── Control entities (Home Assistant–native, auto-published via MQTT) ───────
+# These replace the old input_* helpers + `platform: homeassistant` mirrors:
+# the device now owns its Power switch, Mode select, Target number and a
+# Prevent Deep Sleep switch, exposed to HA through MQTT discovery.
+#   * command_retain — HA retains the command, so a change made while the device
+#     sleeps is delivered on its next connect (replaces the helper as the
+#     desired-state store across sleep).
+#   * optimistic + restore — the entity adopts the commanded value immediately
+#     and restores its last value from flash on boot (fallback before MQTT
+#     redelivers the retained command).
+# The verified sync_* scripts are unchanged — the ids match the old mirrors.
+switch:
+  - platform: template
+    name: "Power"
+    id: desired_power_state
+    icon: "mdi:power"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    command_retain: true
+    turn_on_action:
+      - if:
+          condition:
+            lambda: 'return id(ble_connected);'
+          then:
+            # The optimistic switch fires this action BEFORE it commits the new
+            # .state (write_state triggers, then publishes), so sync_power_state
+            # would read the stale pre-toggle value and write the wrong power.
+            # A brief delay lets the new state land first. (Number/select are
+            # Call-based and commit before their action, so they don't need it.)
+            - delay: 250ms
+            - logger.log:
+                level: INFO
+                format: "Power set ON — syncing to heat pump"
+            - script.execute: sync_all_settings
+    turn_off_action:
+      - if:
+          condition:
+            lambda: 'return id(ble_connected);'
+          then:
+            - delay: 250ms   # see turn_on_action: let .state commit before sync
+            - logger.log:
+                level: INFO
+                format: "Power set OFF — syncing to heat pump"
+            - script.execute: sync_all_settings
+
+  - platform: template
+    name: "Prevent Deep Sleep"
+    id: prevent_deep_sleep_switch
+    icon: "mdi:sleep-off"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    command_retain: true
+    turn_on_action:
+      - logger.log:
+          level: INFO
+          format: "Prevent deep sleep enabled — staying awake"
+      - deep_sleep.prevent: deep_sleep_1
+    turn_off_action:
+      # Only sleep if deep sleep is enabled at build time; in always-on builds
+      # (enable_deep_sleep: "false") turning this off does nothing.
+      - if:
+          condition:
+            lambda: 'return ${enable_deep_sleep};'
+          then:
+            - logger.log:
+                level: INFO
+                format: "Prevent deep sleep disabled — sleeping shortly"
+            - component.update: battery_voltage
+            - component.update: last_connected
+            - delay: 5s
+            - script.execute: enter_deep_sleep_scheduled
+
+select:
+  - platform: template
+    name: "Mode"
+    id: desired_mode
+    icon: "mdi:thermostat"
+    optimistic: true
+    restore_value: true
+    command_retain: true
+    options: ["Heat", "Cool", "Auto"]
+    initial_option: "Heat"
+    set_action:
+      - if:
+          condition:
+            lambda: 'return id(ble_connected);'
+          then:
+            - logger.log:
+                level: INFO
+                format: "Mode set to %s — syncing to heat pump"
+                args: ['id(desired_mode).current_option().c_str()']
+            # Serialised apply (power → mode → target); mode-before-target
+            # carries the setpoint into the now-current mode's register.
+            - script.execute: sync_all_settings
+
+number:
+  - platform: template
+    name: "Target Temperature"
+    id: desired_target_temp
+    icon: "mdi:thermometer"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 15
+    max_value: 40
+    step: 0.5
+    mode: auto
+    optimistic: true
+    restore_value: true
+    command_retain: true
+    set_action:
+      - if:
+          condition:
+            lambda: 'return id(ble_connected);'
+          then:
+            - logger.log:
+                level: INFO
+                format: "Target set to %.1f — syncing to heat pump"
+                args: ['id(desired_target_temp).state']
+            - script.execute: sync_all_settings
+
 # ─── Binary Sensors ─────────────────────────────────────────────────────────
 binary_sensor:
-  # ── Prevent Deep Sleep helper ─────────────────────────────────────────────
-  # Mirrors the HA helper defined by the global home_assistant_prevent_deep_sleep_switch_name.
-  # Because the state lives in HA, it can be toggled while the device is asleep and the new 
-  # value will be read on the next wake from on_boot.
-  - platform: homeassistant
-    id: prevent_deep_sleep_switch
-    entity_id: ${home_assistant_prevent_deep_sleep_switch_name}
-    on_state:
-      then:
-        - if:
-            condition:
-              # Only sleep if the helper went off AND deep sleep is enabled at
-              # build time. In always-on builds (enable_deep_sleep: "false") the
-              # helper can't force a sleep.
-              and:
-                - binary_sensor.is_off: prevent_deep_sleep_switch
-                - lambda: 'return ${enable_deep_sleep};'
-            then:
-              # Toggle was just turned off while device was awake → sleep.
-              - logger.log:
-                  level: INFO
-                  format: "Prevent deep sleep disabled — sleeping shortly"
-              - component.update: battery_voltage
-              - component.update: last_connected
-              - delay: 5s
-              - script.execute: enter_deep_sleep_scheduled
-            else:
-              # Toggle just turned on while awake → cancel any pending sleep.
-              - logger.log:
-                  level: INFO
-                  format: "Prevent deep sleep enabled — staying awake"
-              - deep_sleep.prevent: deep_sleep_1
-
-  # ─── Desired Power State (mirror of HA helper) ───────────────────────────
-  # Mirrors the HA helper defined by the global home_assistant_desired_power_state_switch_name.
-  # Like the target temp helper, the value lives in HA so it can be changed while the device is 
-  # asleep — the new state is read on the next wake and applied via the on_connect handler.
-  - platform: homeassistant
-    id: desired_power_state
-    entity_id: ${home_assistant_desired_power_state_switch_name}
-    on_state:
-      then:
-        # Apply immediately if the heat pump is reachable. sync_power_state
-        # writes, re-polls, and retries until the heat pump confirms the new
-        # state, so a single dropped BLE write no longer silently fails.
-        # If BLE is down, the on_connect handler reconciles on the next wake.
-        - if:
-            condition:
-              lambda: 'return id(ble_connected);'
-            then:
-              - logger.log:
-                  level: INFO
-                  format: "Helper changed power to %s — syncing to heat pump"
-                  args: ['id(desired_power_state).state ? "ON" : "OFF"']
-              - script.execute: sync_power_state
-
   # ─── Current Power State (read from BLE notify) ──────────────────────────
   # Reflects the heat pump's actual power state as reported via BLE. May briefly
   # differ from desired_power_state while a sync is in flight, or
@@ -819,31 +897,6 @@ binary_sensor:
 
 # ─── Sensors ────────────────────────────────────────────────────────────────
 sensor:
-  # ── Desired Target Temperature (HA helper mirror) ─────────────────────────
-  # Mirrors the HA helper defined by the global home_assistant_desired_target_temp_number_name.
-  # Because the value lives in HA, it can be updated  while the device is asleep
-  #   - If the device is awake, the on_value handler writes immediately.
-  #   - If asleep, on_boot reads the new value on the next wake and the
-  #     ble_client on_connect handler syncs it to the heat pump.
-  - platform: homeassistant
-    id: desired_target_temp
-    entity_id: ${home_assistant_desired_target_temp_number_name}
-    on_value:
-      then:
-        # Apply immediately if the heat pump is reachable. sync_target_temp
-        # writes, re-polls, and retries until current_target_temp matches, so
-        # a single dropped BLE write no longer silently fails. If BLE is down,
-        # the on_connect handler reconciles on the next wake.
-        - if:
-            condition:
-              lambda: 'return id(ble_connected);'
-            then:
-              - logger.log:
-                  level: INFO
-                  format: "Helper changed target to %.1f — syncing to heat pump"
-                  args: ['id(desired_target_temp).state']
-              - script.execute: sync_target_temp
-
   # ── BLE Notification Parser (internal) ────────────────────────────────────
   # This sensor subscribes to BLE notifications from the heat pump and parses
   # each Modbus reply into the real sensors below. It has no value of its
@@ -1274,37 +1327,6 @@ text_sensor:
       if (id(last_connected_str)[0] == '\0') return {};
       return std::string(id(last_connected_str));
 
-  # ─── Desired Mode (mirror of HA helper) ──────────────────────────────────
-  # Mirrors the input_select helper. Like the other mirrored helpers, the
-  # value lives in HA so it can be changed while the device is asleep — the
-  # new state is read on the next wake and applied via on_connect.
-  #
-  # Expected values: "Heat", "Cool", "Auto"
-  - platform: homeassistant
-    id: desired_mode
-    entity_id: ${home_assistant_desired_mode_select_name}
-    on_value:
-      then:
-        # Apply immediately if the heat pump is reachable. sync_mode writes,
-        # re-polls, and retries until current_mode matches. If BLE is down,
-        # the on_connect handler reconciles on the next wake.
-        - if:
-            condition:
-              lambda: 'return id(ble_connected);'
-            then:
-              - logger.log:
-                  level: INFO
-                  format: "Helper changed mode to %s — syncing to heat pump"
-                  args: ['id(desired_mode).state.c_str()']
-              - script.execute: sync_mode
-              - script.wait: sync_mode
-
-              # sync_mode's final poll has refreshed current_target_temp from
-              # the NEW mode's register. Now push the desired target into it so
-              # the setpoint carries across the mode change (sync_target_temp
-              # no-ops if it already matches).
-              - script.execute: sync_target_temp
-
   # ─── Current Mode (read from BLE notify) ─────────────────────────────────
   # Reflects the heat pump's actual mode as reported via BLE. Updated by the
   # notify parser when block 0x03E9 arrives — register 0x03F4 at offset 11.
@@ -1395,6 +1417,32 @@ text_sensor:
 
 # ─── Scripts ────────────────────────────────────────────────────────────────
 script:
+  # Apply all desired settings to the heat pump, SERIALISED so that no two BLE
+  # writes ever overlap. The heat pump's single GATT link can't take
+  # back-to-back/concurrent writes — the colliding one is dropped (un-ACK'd) —
+  # so both the on_connect reconcile AND every immediate control change
+  # (Power / Mode / Target) must funnel through this one sequence rather than
+  # firing their own sync_* concurrently. mode: restart coalesces rapid changes
+  # (e.g. dragging the target slider) to just the latest values.
+  #
+  # Order: POWER first, then MODE, then TARGET.
+  #   * Power first so the unit is on (and accepting writes) before we change
+  #     mode/setpoint — some units reject those while off, which would
+  #     otherwise silently fail until the next reconcile. When power isn't
+  #     changing this is an instant no-op, so it only adds time on a real
+  #     power-on — exactly when you'd want to wait for "on" anyway.
+  #   * Mode before target because the target's register is mode-dependent, so
+  #     the setpoint must land in the now-current mode's register.
+  - id: sync_all_settings
+    mode: restart
+    then:
+      - script.execute: sync_power_state
+      - script.wait: sync_power_state
+      - script.execute: sync_mode
+      - script.wait: sync_mode
+      - script.execute: sync_target_temp
+      - script.wait: sync_target_temp
+
   # Send the Modbus "read all status" command to the heat pump.
   # The heat pump replies with 4 fragmented notifications covering blocks
   # 0x03E9, 0x0416, 0x07D1, 0x07FE — the BLE notify parser above picks
@@ -1533,8 +1581,10 @@ script:
     then:
       - if:
           condition:
-            # Need a desired value to aim for and a live BLE link to poll/write.
-            lambda: 'return id(desired_power_state).has_state() && id(ble_connected);'
+            # A switch always has a usable .state (unlike the old HA-helper
+            # mirror, switch::has_state() is never set — guarding on it would
+            # block every power sync). Just need a live BLE link to poll/write.
+            lambda: 'return id(ble_connected);'
           then:
             - lambda: 'id(power_sync_attempts) = 0;'
             - while:
@@ -1559,10 +1609,14 @@ script:
                       power_on: !lambda 'return id(desired_power_state).state;'
                   # Let the write apply, then re-poll and wait for the notify
                   # response so current_power_state reflects reality before the
-                  # while condition re-evaluates.
+                  # while condition re-evaluates. The heat pump can take ~10-15s
+                  # to report a power change back in register 0x03F3, so this
+                  # settle is longer than mode/target's — too short and the
+                  # confirm check gives up (false "NOT confirmed") before the
+                  # pump has reported the change it already accepted (ACK'd).
                   - delay: 2s
                   - script.execute: poll_heat_pump
-                  - delay: 3s
+                  - delay: 6s
             # Report the outcome so the logs make a failure obvious.
             - lambda: |-
                 bool synced = id(current_power_state).has_state() &&
@@ -1624,31 +1678,31 @@ script:
                     if (id(mode_sync_attempts) >= 3) return false;
                     // No reading yet — loop so we write and poll to get one.
                     if (!id(current_mode).has_state()) return true;
-                    return id(desired_mode).state != id(current_mode).state;
+                    return id(desired_mode).current_option() != id(current_mode).state;
                 then:
                   - lambda: 'id(mode_sync_attempts) += 1;'
                   - logger.log:
                       level: INFO
                       format: "Syncing mode (attempt %d/3): HA=%s"
                       args: ['id(mode_sync_attempts)',
-                             'id(desired_mode).state.c_str()']
+                             'id(desired_mode).current_option().c_str()']
                   - script.execute:
                       id: write_mode
-                      mode: !lambda 'return id(desired_mode).state;'
+                      mode: !lambda 'return id(desired_mode).current_option();'
                   - delay: 2s
                   - script.execute: poll_heat_pump
                   - delay: 3s
             - lambda: |-
                 bool synced = id(current_mode).has_state() &&
-                              id(desired_mode).state == id(current_mode).state;
+                              id(desired_mode).current_option() == id(current_mode).state;
                 if (synced) {
                   ESP_LOGI("heatpump", "Mode confirmed: %s",
-                           id(desired_mode).state.c_str());
+                           id(desired_mode).current_option().c_str());
                 } else {
                   ESP_LOGW("heatpump",
                            "Mode NOT confirmed after %d attempts (HA=%s) — "
                            "will retry on next reconcile",
-                           id(mode_sync_attempts), id(desired_mode).state.c_str());
+                           id(mode_sync_attempts), id(desired_mode).current_option().c_str());
                 }
 
   # Choose the correct deep sleep duration based on the current time of day,

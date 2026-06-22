@@ -21,5 +21,7 @@ CONFIG_SCHEMA = cv.Schema({})
 async def to_code(config):
     # Expose the codec to lambdas in the device YAML. The component's source
     # files are compiled automatically once the component is used.
-    cg.add_global(cg.RawExpression('#include "esphome/components/phnix/frame.h"'))
-    cg.add_global(cg.RawExpression('#include "esphome/components/phnix/decode.h"'))
+    # RawStatement (not RawExpression) — the latter appends a ';', producing
+    # `#include "...";` which the compiler warns about ("extra tokens").
+    cg.add_global(cg.RawStatement('#include "esphome/components/phnix/frame.h"'))
+    cg.add_global(cg.RawStatement('#include "esphome/components/phnix/decode.h"'))

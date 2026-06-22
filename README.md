@@ -42,6 +42,16 @@ Once running, the following entities appear in Home Assistant:
 | Error Description | Text sensor | Human-readable description of active faults |
 | Heat Pump BLE Connection | Binary sensor | Whether the ESP is connected to the heat pump |
 
+The following **controls** also appear (published via MQTT discovery — no setup
+required):
+
+| Entity | Type | Description |
+|--------|------|-------------|
+| Power | Switch | Turn the heat pump on / off |
+| Mode | Select | Heat / Cool / Auto |
+| Target Temperature | Number (slider) | Desired water temperature (15–40 °C) |
+| Prevent Deep Sleep | Switch | Keep the device awake for OTA / debugging |
+
 A set of diagnostic entities is also available (in the collapsed Diagnostics section of the HA device page): compressor, circulate pump, high fan, and 4-way valve output states; individual temperature sensor fault indicators (P01/P02/P04/P05/P81); raw error code; firmware version; battery voltage and charge level; last-connected timestamp; and engineering set-points for heating, cooling, and auto modes.
 
 <!-- TODO: Add screenshot of Home Assistant device page here -->
@@ -137,11 +147,17 @@ wifi_ssid: "your WiFi network name"
 wifi_password: "your WiFi network password"
 ap_fallback_password: "a strong password for the fallback hotspot"
 ota_password: "a strong password for OTA updates"
-pool_heatpump_proxy_api_key: "a random 32-character hex string"
 pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
+mqtt_broker: "homeassistant.local"        # or your broker's IP, e.g. 192.168.1.x
+mqtt_username: "your MQTT broker username"
+mqtt_password: "your MQTT broker password"
 ```
 
-To generate a random API key, run `openssl rand -hex 16` in a terminal, or use any random hex generator online.
+> **MQTT:** the device talks to Home Assistant over MQTT (e.g. the Home
+> Assistant Mosquitto add-on — see [MQTT setup](#5-set-up-mqtt) below). All the
+> connection details — `mqtt_broker`, `mqtt_username`, `mqtt_password` — live in
+> `secrets.yaml`, so there's nothing to set in your device file. Override only
+> the port via the `mqtt_port` substitution if your broker isn't on 1883.
 
 ### 4. Flash the firmware
 
@@ -159,74 +175,49 @@ This confirms the BLE poll completed successfully and entities will start popula
 
 > **If you could not find the MAC address in step 1:** Leave `pool_heatpump_proxy_device_mac_address` as a placeholder and flash. The ESPHome BLE tracker will log nearby Bluetooth devices — look for an entry named `BLUENRG-XXXXXX`. The MAC address shown alongside it is your heat pump's. Update `secrets.yaml` and reflash.
 
-### 5. Create Home Assistant helpers
+### 5. Set up MQTT
 
-The device reads its desired power state, mode, and target temperature from four HA input helpers. Create these under **Settings → Devices & Services → Helpers → Create helper**:
+The device talks to Home Assistant over **MQTT** — there are **no helpers or
+template entities to create**. The control entities (Power, Mode, Target
+Temperature, Prevent Deep Sleep) and all the sensors are published
+automatically via MQTT discovery and appear on the device's page in HA.
 
-| Type | Suggested name | Entity ID | Notes |
-|------|---------------|-----------|-------|
-| Toggle | Pool Heater Prevent Deep Sleep | `input_boolean.pool_heater_prevent_deep_sleep` | Used for OTA and debugging — see [Sleep mode and OTA](#sleep-mode-and-ota-updates) |
-| Toggle | Pool Heater Power | `input_boolean.pool_heater_power` | Desired on/off state |
-| Number | Pool Target Temperature | `input_number.pool_target_temperature` | Min: 15, Max: 40, Step: 0.5, Unit: °C |
-| Dropdown | Pool Heater Mode | `input_select.pool_heater_mode` | Options: Heat, Cool, Auto |
+You need:
 
-If you use different entity IDs, set the matching `substitutions:` entries — in your own device file if you used the remote-package method (Option A), or at the top of `pool-heatpump-proxy.yaml` if you copied it manually (Option B).
+1. **An MQTT broker.** The easiest option is the
+   [Mosquitto broker add-on](https://github.com/home-assistant/addons/blob/master/mosquitto/DOCS.md)
+   in Home Assistant. Install it, and create (or note) a username/password for
+   the device to log in with.
+2. **The MQTT integration enabled in Home Assistant**
+   (**Settings → Devices & Services → Add Integration → MQTT**), pointed at the
+   same broker. This is what receives the discovery messages.
+3. **The three MQTT secrets** in your `secrets.yaml` (`mqtt_broker`,
+   `mqtt_username`, `mqtt_password`) — see step 3 above.
 
-### 6. Create Home Assistant template wrapper entities
+After flashing, the heat pump appears as a new MQTT device in HA with all its
+entities. Power, mode and target temperature are controllable directly, and —
+because their command topics are retained — changes you make while the device
+is asleep are applied on its next wake.
 
-The helpers above store the desired state, but to make them controllable from the heat pump's device page in HA, create template entities that wrap each helper and write back to it.
+> Override the broker port only if it isn't the default 1883, via the
+> `mqtt_port` substitution in your device file.
 
-Add the following to your `configuration.yaml` (or a file you include from it), then restart Home Assistant:
-
-```yaml
-template:
-  - switch:
-      - name: "Pool Heater Power"
-        unique_id: pool_heater_power_template
-        state: "{{ is_state('input_boolean.pool_heater_power', 'on') }}"
-        turn_on:
-          action: input_boolean.turn_on
-          target:
-            entity_id: input_boolean.pool_heater_power
-        turn_off:
-          action: input_boolean.turn_off
-          target:
-            entity_id: input_boolean.pool_heater_power
-
-  - number:
-      - name: "Pool Target Temperature"
-        unique_id: pool_target_temperature_template
-        state: "{{ states('input_number.pool_target_temperature') | float(26) }}"
-        min: 15
-        max: 40
-        step: 0.5
-        unit_of_measurement: "°C"
-        set_value:
-          action: input_number.set_value
-          target:
-            entity_id: input_number.pool_target_temperature
-          data:
-            value: "{{ value }}"
-
-  - select:
-      - name: "Pool Heater Mode"
-        unique_id: pool_heater_mode_template
-        state: "{{ states('input_select.pool_heater_mode') }}"
-        options:
-          - Heat
-          - Cool
-          - Auto
-        select_option:
-          action: input_select.select_option
-          target:
-            entity_id: input_select.pool_heater_mode
-          data:
-            option: "{{ option }}"
-```
-
-> **Important:** The `option: "{{ option }}"` line in the select's `select_option` action uses a template variable that HA injects when the user picks an option. If you create this entity via the HA visual editor rather than `configuration.yaml`, you must switch to **YAML mode** for the `select_option` action — the visual editor cannot express template variables in action data fields.
-
-After restarting HA, navigate to the heat pump's device page and use **Add to device** to associate the new template entities with the ESPHome device.
+> ### Upgrading from v1.x (the native-API version)
+>
+> v2.0.0 switched from the ESPHome native API to MQTT. If you ran an earlier
+> version:
+>
+> 1. Add the MQTT broker + the three `mqtt_*` secrets (above) and reflash.
+> 2. The old `pool_heatpump_proxy_api_key` secret and the four `input_*`
+>    helpers + `configuration.yaml` template entities are no longer used — you
+>    can delete them.
+> 3. In HA, **delete the old ESPHome (native API) integration entry** for this
+>    device (**Settings → Devices & Services → ESPHome →** the device **→ ⋮ →
+>    Delete**). The device's old entities are owned by that integration and
+>    can't be removed individually while it exists; deleting the entry clears
+>    them and removes the duplicates left behind by the new MQTT entities. (A
+>    small amount of recent history for those entities is lost — expected, and
+>    not worth preserving.)
 
 ---
 
@@ -244,7 +235,7 @@ Place the ESP within BLE range of the heat pump — typically **2–5 metres** w
 
 If you have USB power near your heat pump, you can run the ESP permanently from USB:
 
-- **Recommended:** set `enable_deep_sleep: "false"` in your device file's substitutions. This permanently disables the sleep cycle at build time — the ESP stays awake and polls every 30 seconds — so you don't depend on the runtime helper being on. (Alternatively, keep the **Pool Heater Prevent Deep Sleep** helper toggled **on** at all times for the same effect without recompiling.)
+- **Recommended:** set `enable_deep_sleep: "false"` in your device file's substitutions. This permanently disables the sleep cycle at build time — the ESP stays awake and polls every 30 seconds — so you don't depend on the runtime switch being on. (Alternatively, keep the **Prevent Deep Sleep** switch toggled **on** at all times for the same effect without recompiling.)
 - The battery voltage and battery level sensors will report meaningless values (~5 V USB supply, not a LiPo cell). You can hide or disable these entities in HA, or remove the `battery_voltage` and `battery_level` sensors from the YAML.
 - OTA updates work at any time — the ESP is always awake and reachable.
 
@@ -252,8 +243,8 @@ If you have USB power near your heat pump, you can run the ESP permanently from 
 
 Connect a 3.7 V LiPo cell to the FireBeetle 2's battery connector:
 
-- The ESP wakes on a day/night schedule, connects to the heat pump, syncs any pending helper changes, polls sensor data, pushes everything to HA, then returns to deep sleep.
-- Changes made to HA helpers (power, mode, temperature) while the ESP is asleep are queued in HA and applied on the next wake.
+- The ESP wakes on a day/night schedule, connects to the heat pump, syncs any pending control changes, polls sensor data, pushes everything to HA, then returns to deep sleep.
+- Changes made to the controls (power, mode, temperature) while the ESP is asleep are retained by MQTT and applied on the next wake.
 - Battery voltage and charge percentage are reported as diagnostic entities.
 
 The sleep durations and day window are all configurable in the `substitutions:` block at the top of `pool-heatpump-proxy.yaml` — see [Sleep schedule](#sleep-schedule) below.
@@ -275,26 +266,27 @@ All four values are `substitutions:` — set them in your own device file (remot
 
 If HA time has not yet synced when the device is ready to sleep, it falls back to the night duration.
 
-The schedule has no effect when **Pool Heater Prevent Deep Sleep** is on — the device stays awake and polls every 30 seconds regardless.
+The schedule has no effect when the **Prevent Deep Sleep** switch is on — the device stays awake and polls every 30 seconds regardless.
 
 ### How sleep works
 
 In battery mode, the ESP runs a brief wake cycle each time it wakes from deep sleep:
 
-1. Connect to WiFi and the HA API
-2. Read the current state of all HA helpers
+1. Connect to WiFi and the MQTT broker
+2. Receive the latest desired control state (the retained MQTT commands for
+   power, mode and target temperature)
 3. Connect to the heat pump via BLE
-4. Poll sensor data and sync any pending helper changes to the heat pump
-5. Push sensor readings to HA
+4. Poll sensor data and sync any pending control changes to the heat pump
+5. Publish sensor readings to HA over MQTT
 6. Enter deep sleep
 
 The device is awake for roughly 20–30 seconds per cycle. If you need to interact with it — for an OTA update, live log monitoring, or fast feedback while configuring — you need to keep it awake first.
 
 ### Keeping the device awake
 
-Toggle the **Pool Heater Prevent Deep Sleep** helper **on** in HA before the device's next wake. On that wake, the device will detect the toggle and stay awake indefinitely, polling every 30 seconds. Toggle it **off** to return to the normal sleep cycle; the device will enter deep sleep within a few seconds of detecting the change.
+Toggle the **Prevent Deep Sleep** switch **on** in HA before the device's next wake. On that wake, the device will detect the toggle and stay awake indefinitely, polling every 30 seconds. Toggle it **off** to return to the normal sleep cycle; the device will enter deep sleep within a few seconds of detecting the change.
 
-> **Always turn Prevent Deep Sleep on before attempting an OTA update.** If the helper is off when the flash begins, the device will go to sleep mid-transfer and the update will fail.
+> **Always turn Prevent Deep Sleep on before attempting an OTA update.** If it's off when the flash begins, the device will go to sleep mid-transfer and the update will fail.
 
 ---
 
@@ -307,10 +299,15 @@ Entities stay `unknown` until the first successful BLE poll completes. Watch the
 Two common causes: the MAC address in `secrets.yaml` is wrong (check it matches the address from the AquaTemp app exactly, including colons), or the AquaTemp app currently has an active BLE connection to the heat pump. Close the app completely and wait for the ESP's next connection attempt.
 
 **OTA flash hangs or the device is unreachable for OTA**
-The device enters deep sleep roughly 20–30 seconds after booting. Turn the **Pool Heater Prevent Deep Sleep** helper **on** in HA, wait for the next wake cycle to pick it up, then attempt the OTA flash. See [Sleep mode and OTA](#sleep-mode-and-ota-updates).
+The device enters deep sleep roughly 20–30 seconds after booting. Turn the **Prevent Deep Sleep** switch **on** in HA, wait for the next wake cycle to pick it up, then attempt the OTA flash. See [Sleep mode and OTA](#sleep-mode-and-ota-updates).
 
 **Target temperature or mode does not sync to the heat pump**
-Check that the four HA helpers were created with the exact entity IDs listed in step 5, or that the `substitutions:` block at the top of the YAML has been updated to match your actual entity IDs. The device logs will show `Syncing target:` or `Syncing mode:` when a sync write occurs — if these lines never appear, the helpers are not being read correctly.
+Changes are written only while the ESP is connected to the heat pump over BLE.
+The device logs show `Mode set to …` / `Target set to …` when you change a
+control, then a `Syncing …` line when the write occurs. If a control change in
+HA produces nothing in the log, check the device is connected to MQTT (the
+*Heat Pump BLE Connection* sensor and the broker logs) and that the control
+entities appeared via MQTT discovery.
 
 **A sensor appears in the Diagnostics section or shows as disabled**
 HA hides diagnostic-category entities in a collapsed section on the device page, and some are disabled by default. Click **Show N disabled entities** at the bottom of the device page to reveal and enable them individually.
