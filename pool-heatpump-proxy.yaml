@@ -1578,8 +1578,10 @@ script:
     then:
       - if:
           condition:
-            # Need a desired value to aim for and a live BLE link to poll/write.
-            lambda: 'return id(desired_power_state).has_state() && id(ble_connected);'
+            # A switch always has a usable .state (unlike the old HA-helper
+            # mirror, switch::has_state() is never set — guarding on it would
+            # block every power sync). Just need a live BLE link to poll/write.
+            lambda: 'return id(ble_connected);'
           then:
             - lambda: 'id(power_sync_attempts) = 0;'
             - while:
