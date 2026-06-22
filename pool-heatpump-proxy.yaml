@@ -621,17 +621,9 @@ ble_client:
         # FIRST so that the target then lands in the (now correct) active
         # mode's register, carrying the setpoint across a mode change.
 
-        # ── Mode ──
-        - script.execute: sync_mode
-        - script.wait: sync_mode
-
-        # ── Target temp ──
-        - script.execute: sync_target_temp
-        - script.wait: sync_target_temp
-
-        # ── Power State ──
-        - script.execute: sync_power_state
-        - script.wait: sync_power_state
+        # ── Reconcile all settings (serialised — see sync_all_settings) ──
+        - script.execute: sync_all_settings
+        - script.wait: sync_all_settings
 
         # Reconcile finished — on_boot may now proceed to deep sleep.
         - lambda: 'id(reconcile_done) = true;'
@@ -674,7 +666,7 @@ switch:
             - logger.log:
                 level: INFO
                 format: "Power set ON — syncing to heat pump"
-            - script.execute: sync_power_state
+            - script.execute: sync_all_settings
     turn_off_action:
       - if:
           condition:
@@ -684,7 +676,7 @@ switch:
             - logger.log:
                 level: INFO
                 format: "Power set OFF — syncing to heat pump"
-            - script.execute: sync_power_state
+            - script.execute: sync_all_settings
 
   - platform: template
     name: "Prevent Deep Sleep"
@@ -733,11 +725,9 @@ select:
                 level: INFO
                 format: "Mode set to %s — syncing to heat pump"
                 args: ['id(desired_mode).current_option().c_str()']
-            - script.execute: sync_mode
-            - script.wait: sync_mode
-            # Push the desired target into the now-current mode's register so
-            # the setpoint carries across the mode change.
-            - script.execute: sync_target_temp
+            # Serialised apply (mode → target → power); mode-first carries the
+            # target into the now-current mode's register.
+            - script.execute: sync_all_settings
 
 number:
   - platform: template
@@ -762,7 +752,7 @@ number:
                 level: INFO
                 format: "Target set to %.1f — syncing to heat pump"
                 args: ['id(desired_target_temp).state']
-            - script.execute: sync_target_temp
+            - script.execute: sync_all_settings
 
 # ─── Binary Sensors ─────────────────────────────────────────────────────────
 binary_sensor:
@@ -1455,6 +1445,24 @@ text_sensor:
 
 # ─── Scripts ────────────────────────────────────────────────────────────────
 script:
+  # Apply all desired settings to the heat pump, SERIALISED so that no two BLE
+  # writes ever overlap. The heat pump's single GATT link can't take
+  # back-to-back/concurrent writes — the colliding one is dropped (un-ACK'd) —
+  # so both the on_connect reconcile AND every immediate control change
+  # (Power / Mode / Target) must funnel through this one sequence rather than
+  # firing their own sync_* concurrently. mode: restart coalesces rapid changes
+  # (e.g. dragging the target slider) to just the latest values. Mode is synced
+  # first so the target then lands in the now-current mode's register.
+  - id: sync_all_settings
+    mode: restart
+    then:
+      - script.execute: sync_mode
+      - script.wait: sync_mode
+      - script.execute: sync_target_temp
+      - script.wait: sync_target_temp
+      - script.execute: sync_power_state
+      - script.wait: sync_power_state
+
   # Send the Modbus "read all status" command to the heat pump.
   # The heat pump replies with 4 fragmented notifications covering blocks
   # 0x03E9, 0x0416, 0x07D1, 0x07FE — the BLE notify parser above picks
