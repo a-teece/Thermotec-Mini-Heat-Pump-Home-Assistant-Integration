@@ -734,7 +734,7 @@ number:
     min_value: 15
     max_value: 40
     step: 0.5
-    mode: box
+    mode: slider
     optimistic: true
     restore_value: true
     command_retain: true
