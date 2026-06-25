@@ -24,6 +24,22 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v2.0.1] - 2026-06-25
+
+### Fixed
+
+- **Entities no longer show as `unavailable` while the device deep-sleeps.**
+  ESPHome's default MQTT birth/will (availability) messages mark the device
+  `offline` on every sleep, and discovery wires every entity to that topic — so
+  with the device asleep ~85% of each cycle, the dashboard read `unavailable`
+  almost whenever you looked, despite the last values being retained on the
+  broker. The birth and will messages are now disabled, so Home Assistant shows
+  the last retained reading across sleep. Liveness is still observable via
+  `Last Connected`, `Battery Level` and `Heat Pump BLE Connection` (alert on a
+  stale `Last Connected` if you want a dead-bridge alarm).
+
+### Changed
+
 - Internal tidy-up (no user impact): retire the snapshot-to-globals machinery
   now that MQTT's retained state topics keep Home Assistant populated across
   deep sleep, and rework the deep-sleep enable so a fresh install boots awake.
