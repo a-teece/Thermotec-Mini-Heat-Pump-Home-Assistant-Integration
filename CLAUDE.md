@@ -77,18 +77,20 @@ new protocol facts are discovered.
 These decisions are deliberate. Preserve them unless there's a specific
 reason to revisit, and update this section if they change.
 
-1. **Home Assistant helpers are the source of truth.** The desired power,
-   mode, and target temperature live in HA `input_*` helpers, not on the
-   ESP. This is what lets the user change settings while the ESP is in
-   deep sleep — the new value is read on the next wake and synced to the
-   heat pump. The ESP mirrors each helper and reconciles on every BLE
-   connect.
+1. **The retained MQTT command topic is the source of truth for desired
+   state.** Desired power, mode, and target temperature live in the
+   **retained command topics** of the device's own MQTT-discovered controls
+   (`command_retain: true`), not on the ESP and (since v2.0.0) no longer in HA
+   `input_*` helpers. This is what lets the user change settings while the ESP
+   is in deep sleep — the broker re-delivers the retained command on the next
+   connect, and the ESP reconciles it to the heat pump on every BLE connect.
+   Each control also restores its last value from flash on boot.
 
 2. **Deep sleep is entered explicitly, never via `run_duration`.** The
-   `on_boot` handler runs the full wake cycle (wait for API → read helpers →
-   connect BLE → poll → sync → settle) and only then calls
+   `on_boot` handler runs the full wake cycle (wait for MQTT broker → receive
+   retained commands → connect BLE → poll → sync → settle) and only then calls
    `deep_sleep.enter`. This guarantees we never sleep mid-BLE-write. A
-   `prevent_deep_sleep` helper keeps the device awake for OTA/debugging.
+   `prevent_deep_sleep` switch keeps the device awake for OTA/debugging.
 
 3. **Target temperature is mode-aware.** Each operating mode stores its
    target in a different register (Heat `0x0416`, Cool `0x041B`, Auto
@@ -202,23 +204,25 @@ reason to revisit, and update this section if they change.
 
 ## Home Assistant setup
 
-The device depends on four HA helpers (created under Settings → Devices &
-Services → Helpers). Entity IDs are configurable via `substitutions:` at
-the top of the YAML.
+**No manual HA helpers or template entities.** Since the MQTT transition
+(v2.0.0) the device owns its own control entities and publishes them via
+**MQTT discovery**, so they appear under the device automatically — there is
+nothing to create in Settings → Helpers and no `configuration.yaml` editing.
 
-| Helper | Type | Default entity ID |
-|--------|------|-------------------|
-| Prevent deep sleep | Toggle (`input_boolean`) | `input_boolean.pool_heater_prevent_deep_sleep` |
-| Power | Toggle (`input_boolean`) | `input_boolean.pool_heater_power` |
-| Target temperature | Number (`input_number`, 15–40, step 0.5) | `input_number.pool_target_temperature` |
-| Mode | Dropdown (`input_select`, Heat/Cool/Auto) | `input_select.pool_heater_mode` |
+| Control | Entity type (MQTT-discovered) | Notes |
+|---------|-------------------------------|-------|
+| Prevent deep sleep | `switch` | Keeps the device awake for OTA / debugging |
+| Power | `switch` | On/off |
+| Target temperature | `number` (15–40, step 0.5) | Renders as slider **and** input box (`mode: auto`) |
+| Mode | `select` (Heat/Cool/Auto) | Mode-aware target routing — see decision 3 |
 
-To make these controllable from the device page in HA, each is wrapped in
-a **template entity** (switch / number / select) that mirrors the helper
-state and writes back to it. The template select's `select_option` action
-must pass `option: "{{ option }}"` — the visual editor can't express this,
-so that action needs to be edited in YAML mode. Device association is
-available for UI-created template helpers but not for YAML-defined ones.
+The desired state used to live in HA `input_*` helpers; it now lives in the
+**retained MQTT command topics** (`command_retain: true` on each control), so a
+change made while the device sleeps is re-delivered on its next connect and
+reconciled to the heat pump (decision 1). Each control also restores its last
+value from flash on boot. The only HA prerequisite is an **MQTT broker** (e.g.
+the Mosquitto add-on) — the `mqtt_broker` / `mqtt_username` / `mqtt_password`
+secrets point the device at it.
 
 ## Build / flash workflow
 
@@ -228,7 +232,10 @@ available for UI-created template helpers but not for YAML-defined ones.
 - A `secrets.yaml` is required. Needed keys (see the comment block at the
   top of the YAML for the full list with examples):
   `wifi_ssid`, `wifi_password`, `ap_fallback_password`, `ota_password`,
-  `pool_heatpump_proxy_api_key`, `pool_heatpump_proxy_device_mac_address`.
+  `mqtt_broker`, `mqtt_username`, `mqtt_password`,
+  `pool_heatpump_proxy_device_mac_address`. (The old
+  `pool_heatpump_proxy_api_key` was for native-API encryption and was removed
+  in v2.0.0 — the transport is MQTT now.)
 - After flashing, confirm a clean compile and watch the device logs for the
   `[heatpump] Heat Pump power=… mode=…` line — that confirms the poll
   parser is running and entities will populate. Entities read `unknown`
