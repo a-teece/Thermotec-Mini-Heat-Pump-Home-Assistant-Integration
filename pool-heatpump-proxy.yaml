@@ -482,6 +482,19 @@ mqtt:
   discovery: true
   discovery_retain: true
   reboot_timeout: 0s
+  # Disable the birth/will (availability) messages. By default ESPHome
+  # publishes "online"/"offline" to <prefix>/status, and MQTT discovery wires
+  # EVERY entity to that availability topic — so each deep sleep makes the
+  # broker see the device go away and HA flips the whole device to
+  # `unavailable`, even though the last state values are still retained. A
+  # battery deep-sleep device is "asleep", not "offline", ~85% of the time, so
+  # this made every entity read `unavailable` almost whenever you looked.
+  # Empty messages → no availability topic → HA shows the last retained value
+  # across sleep. (Liveness is instead visible via Last Connected / Battery /
+  # BLE Connection — add an HA automation alerting on a stale Last Connected if
+  # you want a dead-bridge alarm.)
+  birth_message:
+  will_message:
   # Track connection state so on_boot can wait for the broker before deciding
   # whether to sleep (the API's api.connected role, now MQTT's).
   on_connect:
