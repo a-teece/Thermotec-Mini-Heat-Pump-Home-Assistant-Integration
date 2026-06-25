@@ -24,6 +24,19 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v2.0.2] - 2026-06-25
+
+### Removed
+
+- **Internal (no user impact): retired the snapshot-to-globals machinery.** The
+  ~25 `g_*` restored globals plus `snapshot_valid`/`current_mode_str`, the
+  pre-sleep snapshot in `enter_deep_sleep_scheduled` (and its ~1.2 s staging
+  delay), and the `on_boot` Phase 0 republish of those values have all been
+  removed. They existed to avoid `unknown` readings under the old native API;
+  MQTT's retained state topics now carry BLE-derived sensor values across deep
+  sleep, so the machinery was redundant. Net effect: simpler firmware and one
+  fewer flash write per wake. The `last_connected_str` heartbeat global is kept.
+
 ## [v2.0.1] - 2026-06-25
 
 ### Fixed
@@ -37,12 +50,6 @@ Version numbers follow Semantic Versioning:
   the last retained reading across sleep. Liveness is still observable via
   `Last Connected`, `Battery Level` and `Heat Pump BLE Connection` (alert on a
   stale `Last Connected` if you want a dead-bridge alarm).
-
-### Changed
-
-- Internal tidy-up (no user impact): retire the snapshot-to-globals machinery
-  now that MQTT's retained state topics keep Home Assistant populated across
-  deep sleep, and rework the deep-sleep enable so a fresh install boots awake.
 
 ## [v2.0.0] - 2026-06-22
 

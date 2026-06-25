@@ -245,6 +245,7 @@ Connect a 3.7 V LiPo cell to the FireBeetle 2's battery connector:
 
 - The ESP wakes on a day/night schedule, connects to the heat pump, syncs any pending control changes, polls sensor data, pushes everything to HA, then returns to deep sleep.
 - Changes made to the controls (power, mode, temperature) while the ESP is asleep are retained by MQTT and applied on the next wake.
+- While the ESP sleeps, its entities keep showing their **last reported value** rather than going `unavailable` — the values are retained on the MQTT broker. Use the `Last Connected` heartbeat (and `Battery Level` / `Heat Pump BLE Connection`) to tell whether the bridge is actually alive; a stale `Last Connected` is the signal that it has stopped waking. (You can build an HA automation that alerts when `Last Connected` is older than ~20 minutes.)
 - Battery voltage and charge percentage are reported as diagnostic entities.
 
 The sleep durations and day window are all configurable in the `substitutions:` block at the top of `pool-heatpump-proxy.yaml` — see [Sleep schedule](#sleep-schedule) below.
