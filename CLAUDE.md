@@ -150,52 +150,55 @@ reason to revisit, and update this section if they change.
    branch of `on_boot` never reaches the sleep path, so it would otherwise sit
    at `unknown` the whole debug session). The value lives in the
    `last_connected_str` **restored global** (`char[24]`, not `std::string` —
-   only trivially-copyable types restore). `on_boot` Phase 0 republishes it
-   *synchronously, before the API connection wait*, so HA sees the previous
-   timestamp the instant it reconnects and never records an `unknown` for the
-   entity each wake. Because ESPHome's periodic preferences flush is far longer
-   than a wake, `enter_deep_sleep_scheduled` calls `global_preferences->sync()`
-   to force the value to flash before sleeping (≈1 small flash write per wake;
-   NVS wear-levels this — not a practical lifetime concern on esp-idf).
+   only trivially-copyable types restore) — now the *only* template sensor
+   backed by a restored global (see decision 9). `on_boot` Phase 0 republishes
+   it *synchronously, before the MQTT-connect wait*, and
+   `enter_deep_sleep_scheduled` calls `global_preferences->sync()` to force the
+   value (and the retained control-entity preferences) to flash before sleeping,
+   because ESPHome's periodic preferences flush is far longer than a wake (≈1
+   small flash write per wake; NVS wear-levels this — not a practical lifetime
+   concern on esp-idf). The cross-sleep persistence is mostly belt-and-braces
+   now: the MQTT broker also retains the last published value, so HA shows it
+   regardless — but the restored global keeps the device-side sensor populated
+   through a bare power-cycle/OTA too.
 
-9. **BLE-derived sensors are snapshotted into retained globals to eliminate
-   `unknown` on reconnect.** Without this, all template sensors (temperatures,
-   power state, outputs, fault flags, error code, setpoints, mode, diagnostics)
-   have no state on boot and HA records `unknown` during the ~30–40 s window
-   between API connect and the first BLE notification arriving. **Note:**
-   ESPHome's `template` sensor / binary_sensor / text_sensor platforms do
-   **not** support a `restore_value` option (verified against the ESPHome
-   source — only `globals`, and some other platforms, do), so the retained
-   value has to be carried in a restored global, the same pattern already used
-   for `last_connected_str`. The mechanism:
-   - Each BLE-derived sensor has a matching `restore_value: yes` global
-     (`g_*`); floats default to `NAN` so a never-seen sensor republishes as
-     *unavailable* rather than a bogus `0.0`.
-   - `enter_deep_sleep_scheduled` — the single chokepoint before every sleep
-     (reached from both `on_boot` and the prevent-sleep-off handler) —
-     snapshots each sensor's current `.state` into its global (guarded on
-     `has_state()`), sets the `snapshot_valid` gate, **waits ~1.2 s**, then
-     calls `global_preferences->sync()` to force all of it to flash before
-     sleeping. The wait is load-bearing, not cosmetic: a `restore_value`
-     global is a `PollingComponent` that only stages its value to its
-     preference buffer from its `update()` (every 1 s) or `on_shutdown` —
-     **never on assignment**. Snapshotting and then `sync()`-ing in the next
-     action commits the *stale* buffers (the assignments haven't been staged
-     by any poll yet) and `deep_sleep.enter` sleeps before the next poll runs,
-     so the fresh values are lost every cycle. This was the regression that
-     made every BLE sensor read `unknown` each wake (`snapshot_valid` restored
-     `false`, so Phase 0 skipped the republish) while `Last Connected` worked —
-     `last_connected_str` is set back in `on_time_sync`, seconds before sleep,
-     so its poll had already staged it. The delay must exceed the 1 s poll
-     interval so every global's `update()` fires at least once first.
-   - `on_boot` Phase 0 republishes the globals (gated on `snapshot_valid`)
-     synchronously, before the API-connect wait — so HA transitions
-     `unavailable → last-known-value` with no `unknown`. The first poll ~30 s
-     later overwrites them, or the `delta: 0.05` / `delayed_on_off: 1s` filters
-     suppress it as a no-op if unchanged. `error_code` is republished *before*
-     the fault flags so the `has_error` recompute (which reads `error_code`)
-     sees it. Text sensors use `char[]` globals (same `current_mode_str`
-     pattern); they're published only when the stored value is non-empty.
+9. **BLE-derived sensor values persist across deep sleep via MQTT's retained
+   state topics — not a snapshot-to-globals mechanism.** ESPHome publishes each
+   sensor's MQTT state topic with `retain` (the default), and the `mqtt:` block
+   sets `discovery_retain: true`, so the broker holds the last value for every
+   entity and re-delivers it to Home Assistant on (re)subscribe. While the
+   device sleeps, HA therefore shows the last reported reading; combined with
+   decision 10 (availability disabled), entities never flip to `unavailable` or
+   `unknown` mid-cycle. The first poll ~30 s after each wake overwrites the
+   values, or the `delta: 0.05` / `delayed_on_off: 1s` filters suppress it as a
+   no-op if unchanged.
+   - **Historical note (do not re-add):** v1.x and the early MQTT firmware
+     carried every BLE-derived reading in a matching `restore_value: yes`
+     global (`g_*`/`snapshot_valid`/`current_mode_str`/…), snapshotted in
+     `enter_deep_sleep_scheduled` and republished in `on_boot` Phase 0, to dodge
+     the `unknown` the **native API** recorded in the gap between connect and
+     the first poll. MQTT retain makes that entire machinery redundant, so it
+     was removed (see CHANGELOG v2.0.2). Don't reintroduce it: the one
+     underlying ESPHome fact worth keeping is that `template`
+     sensor/binary_sensor/text_sensor platforms do **not** support
+     `restore_value` (only `globals` and a few others do) — which is why
+     `last_connected_str` (decision 8) still needs a restored global, but the
+     bulk sensor state does not now that the broker retains it.
+
+10. **MQTT birth/will (availability) messages are disabled.** ESPHome's default
+    behaviour publishes `online`/`offline` to `<prefix>/status`, and MQTT
+    discovery wires *every* entity to that availability topic — so each deep
+    sleep makes the broker mark the device `offline` and HA flips the whole
+    device to `unavailable`, despite the retained state values (decision 9)
+    still being present. A battery deep-sleep device is asleep ~85% of each
+    cycle, so this made the dashboard read `unavailable` almost whenever the
+    user looked (see CHANGELOG v2.0.1). Setting `birth_message:` and
+    `will_message:` empty in the `mqtt:` block removes the availability topic,
+    so HA shows the last retained value across sleep. **Trade-off:** HA can no
+    longer auto-detect a genuinely dead bridge — liveness is observed instead
+    via `Last Connected` / `Battery Level` / `Heat Pump BLE Connection` (alert
+    on a stale `Last Connected`). Do not re-enable birth/will without restoring
+    that distinction another way.
 
 ## Home Assistant setup
 
