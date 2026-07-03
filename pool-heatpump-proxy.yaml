@@ -300,8 +300,18 @@ mqtt:
   # across sleep. (Liveness is instead visible via Last Connected / Battery /
   # BLE Connection — add an HA automation alerting on a stale Last Connected if
   # you want a dead-bridge alarm.)
+  #
+  # shutdown_message must be disabled EXPLICITLY too: it is a third, independent
+  # message that also defaults to a RETAINED "offline" on <prefix>/status, and
+  # disabling birth/will does NOT disable it (see esphome/components/mqtt
+  # validate_config). Entering deep sleep is a clean shutdown, so without this
+  # line every sleep still published a retained "offline" — and any entity
+  # still wired to the availability topic (discovery from a pre-v2.0.1 build)
+  # flipped to `unavailable` on the first sleep and stayed there, because with
+  # birth disabled nothing ever publishes "online" again.
   birth_message:
   will_message:
+  shutdown_message:
   # Track connection state so on_boot can wait for the broker before deciding
   # whether to sleep (the API's api.connected role, now MQTT's).
   on_connect:
