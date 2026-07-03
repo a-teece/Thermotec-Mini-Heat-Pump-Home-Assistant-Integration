@@ -24,6 +24,23 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Fixed
+
+- **Entities could still show `unavailable` during deep sleep: the retained
+  MQTT `shutdown_message` is now disabled too.** v2.0.1 disabled the birth and
+  will messages, but ESPHome has a third, independent status message —
+  `shutdown_message` — that also defaults to a **retained** `offline` on
+  `<device>/status`, and disabling birth/will does not disable it. Entering
+  deep sleep is a clean shutdown, so the device still published a retained
+  `offline` on every sleep. Any entity still wired to that availability topic
+  (i.e. discovered by pre-v2.0.1 firmware — typically during the upgrade
+  window, or from a stale cached remote package) flipped to `unavailable` on
+  the first sleep and *stayed* there, because with the birth message disabled
+  nothing ever publishes `online` again. After updating, clear the stale
+  retained topic once (`mosquitto_pub -r -n -t '<device>/status'`) — or just
+  let the device reconnect, whose refreshed discovery un-wires the
+  availability topic from every entity anyway.
+
 ## [v2.0.2] - 2026-06-25
 
 ### Removed

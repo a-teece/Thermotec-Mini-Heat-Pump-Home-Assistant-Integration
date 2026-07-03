@@ -196,7 +196,14 @@ reason to revisit, and update this section if they change.
     cycle, so this made the dashboard read `unavailable` almost whenever the
     user looked (see CHANGELOG v2.0.1). Setting `birth_message:` and
     `will_message:` empty in the `mqtt:` block removes the availability topic,
-    so HA shows the last retained value across sleep. **Trade-off:** HA can no
+    so HA shows the last retained value across sleep. **`shutdown_message:`
+    must be emptied as well** — it's a third, independent message that also
+    defaults to a *retained* `offline` on `<prefix>/status` and is **not**
+    disabled by disabling birth/will; deep-sleep entry is a clean shutdown, so
+    leaving it enabled re-published a retained `offline` on every sleep, which
+    permanently stranded any entity still availability-wired by pre-v2.0.1
+    discovery — with birth disabled, nothing publishes `online` again (see
+    CHANGELOG Unreleased). **Trade-off:** HA can no
     longer auto-detect a genuinely dead bridge — liveness is observed instead
     via `Last Connected` / `Battery Level` / `Heat Pump BLE Connection` (alert
     on a stale `Last Connected`). Do not re-enable birth/will without restoring
