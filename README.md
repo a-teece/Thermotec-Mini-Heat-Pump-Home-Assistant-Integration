@@ -52,7 +52,7 @@ required):
 | Target Temperature | Number (slider) | Desired water temperature (15–40 °C) |
 | Prevent Deep Sleep | Switch | Keep the device awake for OTA / debugging |
 
-A set of diagnostic entities is also available (in the collapsed Diagnostics section of the HA device page): compressor, circulate pump, high fan, and 4-way valve output states; individual temperature sensor fault indicators (P01/P02/P04/P05/P81); raw error code; firmware version; battery voltage and charge level; last-connected timestamp; and engineering set-points for heating, cooling, and auto modes.
+A set of diagnostic entities is also available (in the collapsed Diagnostics section of the HA device page): compressor, circulate pump, high fan, and 4-way valve output states; individual temperature sensor fault indicators (P01/P02/P04/P05/P81); raw error code; the heat pump's controller firmware version (Master Program Version); the bridge's own firmware version (which release of this package the ESP is running); battery voltage and charge level; last-connected timestamp; and engineering set-points for heating, cooling, and auto modes.
 
 <!-- TODO: Add screenshot of Home Assistant device page here -->
 

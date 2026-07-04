@@ -280,7 +280,10 @@ to keep in mind when editing:
 **Cutting a release** (maintainer, after a change is merged to `main`):
 
 1. Move the `[Unreleased]` notes in `CHANGELOG.md` under a new `## [vX.Y.Z]`
-   heading with the date; commit to `main`.
+   heading with the date, and set the `firmware_version` substitution in
+   `pool-heatpump-proxy.yaml` to the same `X.Y.Z` (it feeds the `Bridge
+   Firmware Version` diagnostic sensor and the `project:` boot-log stamp);
+   commit both to `main`.
 2. Tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
 3. Create a GitHub Release from the tag (paste the changelog section) so it
    shows on the Releases page that the README links to.

@@ -22,6 +22,16 @@ substitutions:
   # set in your device file.
   phnix_components_ref: main
 
+  # Version of THIS firmware package (not the heat pump's controller firmware —
+  # that's the Master Program Version sensor). Surfaced as the "Bridge Firmware
+  # Version" diagnostic text sensor and in the boot log via the esphome
+  # `project:` block, so you can tell what a device is actually running (the
+  # remote-package + build-cache flow makes that otherwise invisible). Bumped
+  # as part of cutting each release (see CLAUDE.md); matches the most recent
+  # CHANGELOG version heading the build includes. NOT a consumer knob — do not
+  # override it in your device file, or the sensor will misreport.
+  firmware_version: "2.1.0"
+
   # MQTT broker port (the device's Home Assistant transport — see CHANGELOG /
   # the v2.0.0 MQTT transition). The broker host and credentials live in
   # secrets.yaml (mqtt_broker / mqtt_username / mqtt_password) so the whole
@@ -143,6 +153,12 @@ globals:
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
+  # Stamps the firmware version into the boot log ("Project
+  # a-teece.thermotec-pool-heatpump version …") — the quickest way to check
+  # what a device is running from the ESPHome dashboard logs.
+  project:
+    name: "a-teece.thermotec-pool-heatpump"
+    version: ${firmware_version}
   on_boot:
     # Run after WiFi/API are initialized but before deep_sleep enters.
     # Priority -100 places us late in the boot sequence.
@@ -161,6 +177,9 @@ esphome:
             lambda: 'return id(last_connected_str)[0] != ''\0'';'
           then:
             - component.update: last_connected
+      # Publish the firmware version once per wake (constant until reflash;
+      # MQTT retains it for HA, like every other state topic).
+      - component.update: bridge_firmware_version
 
       # ── Phase 1: Wait for the MQTT broker ───────────────────────────────
       # We need the broker up so it can re-deliver the retained control
@@ -1156,6 +1175,20 @@ text_sensor:
       // publish an empty string.
       if (id(last_connected_str)[0] == '\0') return {};
       return std::string(id(last_connected_str));
+
+  # ─── Bridge Firmware Version ──────────────────────────────────────────────
+  # The version of THIS firmware package (the firmware_version substitution,
+  # bumped each release) — answers "what is the device actually running?",
+  # which the remote-package build flow otherwise hides. Not the heat pump's
+  # own controller firmware; that's Master Program Version. Published once per
+  # wake from on_boot Phase 0.
+  - platform: template
+    name: "Bridge Firmware Version"
+    id: bridge_firmware_version
+    icon: "mdi:tag-check-outline"
+    entity_category: diagnostic
+    update_interval: never
+    lambda: 'return std::string("${firmware_version}");'
 
   # ─── Current Mode (read from BLE notify) ─────────────────────────────────
   # Reflects the heat pump's actual mode as reported via BLE. Updated by the
