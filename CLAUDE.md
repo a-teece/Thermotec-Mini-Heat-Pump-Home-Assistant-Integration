@@ -288,9 +288,6 @@ to keep in mind when editing:
 3. Create a GitHub Release from the tag (paste the changelog section) so it
    shows on the Releases page that the README links to.
 
-No tags exist yet; the first one should be `v1.0.0` cut from `main` once this
-package work merges.
-
 ## Testing faults safely
 
 Error decoding was verified by deliberately triggering faults. The only

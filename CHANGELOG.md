@@ -24,6 +24,8 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v2.1.0] - 2026-07-04
+
 ### Added
 
 - **`Bridge Firmware Version` diagnostic sensor.** The device now reports the
