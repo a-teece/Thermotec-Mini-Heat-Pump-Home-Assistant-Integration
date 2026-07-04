@@ -24,6 +24,18 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Added
+
+- **`Bridge Firmware Version` diagnostic sensor.** The device now reports the
+  version of this firmware package (e.g. `2.1.0`) as a diagnostic text sensor
+  on the HA device page, and stamps it into the boot log via the ESPHome
+  `project:` block. Because devices build from a remote package (with a
+  build cache), it was previously impossible to tell from HA what a device
+  was actually running. Backed by a new `firmware_version` substitution —
+  informational only, not meant to be overridden — which is bumped as part of
+  each release. Not to be confused with `Master Program Version`, which is the
+  heat pump's own controller firmware.
+
 ### Fixed
 
 - **Entities could still show `unavailable` during deep sleep: the retained
