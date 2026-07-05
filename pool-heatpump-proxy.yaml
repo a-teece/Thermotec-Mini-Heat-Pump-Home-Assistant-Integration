@@ -174,6 +174,18 @@ globals:
     initial_value: 'false'
     restore_value: no
 
+  # True once on_boot has decided to stay awake (prevent switch on, always-on
+  # build, or double-reset). Gates the Prevent Deep Sleep switch's
+  # turn_off_action so it only triggers a sleep when the device is genuinely
+  # awake — NOT when the switch merely restores to OFF during setup() on boot,
+  # which would short-circuit straight into deep sleep before WiFi/SNTP/BLE are
+  # up (wrong sleep duration — night fallback — and no heat-pump poll). NOT
+  # restored.
+  - id: staying_awake
+    type: bool
+    initial_value: 'false'
+    restore_value: no
+
   # Set true by on_connect once it has finished reconciling HA helpers with
   # the heat pump (including any power-state retries). on_boot waits on this
   # before sleeping, so the device stays awake exactly as long as the
@@ -309,6 +321,10 @@ esphome:
           then:
             # ── AWAKE MODE: stay on (always-on build, OTA, debugging) ───
             - deep_sleep.prevent: deep_sleep_1
+            # Mark that we are genuinely awake, so the Prevent Deep Sleep
+            # switch's turn_off_action may enter sleep on a real toggle — but a
+            # boot-time restore of the switch to OFF cannot (see the switch).
+            - lambda: 'id(staying_awake) = true;'
             - logger.log:
                 level: INFO
                 format: "Staying awake — deep sleep disabled or prevented"
@@ -672,11 +688,19 @@ switch:
           format: "Prevent deep sleep enabled — staying awake"
       - deep_sleep.prevent: deep_sleep_1
     turn_off_action:
-      # Only sleep if deep sleep is enabled at build time; in always-on builds
-      # (enable_deep_sleep: "false") turning this off does nothing.
+      # Enter sleep only when (a) deep sleep is enabled at build time — in
+      # always-on builds (enable_deep_sleep: "false") turning this off does
+      # nothing — AND (b) the device is genuinely awake (staying_awake).
+      # The staying_awake guard is critical: without it, this switch restoring
+      # to OFF during setup() on a normal boot fires turn_off_action and
+      # short-circuits straight into deep sleep ~5 s in, before WiFi/SNTP/BLE
+      # are up — so the device slept with no time sync (night-duration fallback,
+      # even in the daytime) and without polling the heat pump. Gated, a boot
+      # restore is a no-op and on_boot owns the sleep instead (poll → time
+      # sync → correct day/night duration); only a real awake→off toggle sleeps.
       - if:
           condition:
-            lambda: 'return ${enable_deep_sleep};'
+            lambda: 'return ${enable_deep_sleep} && id(staying_awake);'
           then:
             - logger.log:
                 level: INFO

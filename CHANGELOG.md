@@ -26,6 +26,14 @@ Version numbers follow Semantic Versioning:
 
 ### Fixed
 
+- **A cold boot no longer sleeps prematurely with the wrong duration and no
+  poll.** When the `Prevent Deep Sleep` switch restored to `OFF` during boot it
+  could fire its `turn_off_action` and enter deep sleep ~5 s in — before WiFi /
+  SNTP / BLE were up — so the device slept with no time sync (falling back to
+  the *night* duration even in the daytime) and without polling the heat pump.
+  The switch's sleep action is now gated on a `staying_awake` flag, so only a
+  deliberate awake→off toggle triggers a sleep; a normal boot lets `on_boot`
+  own it (poll → time sync → correct day/night duration).
 - **`Prevent Deep Sleep` now takes effect reliably on a cold boot.** Previously
   `on_boot` waited a fixed 2 s for the broker and then checked the switch, so a
   "stay awake" request set while the device slept could lose the race — the
