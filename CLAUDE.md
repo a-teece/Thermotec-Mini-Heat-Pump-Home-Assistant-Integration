@@ -95,7 +95,12 @@ reason to revisit, and update this section if they change.
    `on_message` when the broker re-delivers the retained command) **before** the
    sleep decision, so a "stay awake" request made while the device slept wins
    deterministically instead of racing a fixed delay. See decision 11 for the
-   full recoverability story.
+   full recoverability story. The switch's `turn_off_action` (the awake→sleep
+   path) is gated on a `staying_awake` flag set in on_boot's stay-awake branch,
+   so the switch **restoring to OFF during `setup()`** on a normal boot can't
+   short-circuit straight into `deep_sleep.enter` before WiFi/SNTP/BLE are up
+   (that slept with no time sync — night-duration fallback in daytime — and no
+   poll); on a normal boot on_boot owns the sleep and picks the right duration.
 
 3. **Target temperature is mode-aware.** Each operating mode stores its
    target in a different register (Heat `0x0416`, Cool `0x041B`, Auto
