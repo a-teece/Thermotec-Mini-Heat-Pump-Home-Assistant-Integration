@@ -495,6 +495,52 @@ mqtt:
   # whether to sleep (the API's api.connected role, now MQTT's).
   on_connect:
     - lambda: 'id(mqtt_connected) = true;'
+    # ── Hand-published discovery for Mode + Target Temperature ──────────────
+    # Every control needs `"optimistic": true` in its HA discovery payload so
+    # the HA GUI adopts a change IMMEDIATELY, even while the device is deep
+    # asleep. Without it HA is non-optimistic: it publishes the (retained)
+    # command but snaps the control straight back to the stale retained state
+    # topic, so a user setting the temperature during sleep can't see what
+    # they requested — even though the retained command WILL be applied on the
+    # next wake. In optimistic mode HA shows the commanded value at once,
+    # restores it across HA restarts, and still corrects from the state topic
+    # whenever the awake device publishes.
+    # ESPHome's MQTT switch emits `optimistic` from `assumed_state:` (used by
+    # the Power / Prevent Deep Sleep switches below), but its number/select
+    # components cannot emit it at all — so those two entities set
+    # `discovery: false` and equivalent payloads (identical except for the
+    # added "optimistic") are published here instead, retained, on every
+    # connect (mirroring when ESPHome sends its own discovery).
+    # CRITICAL so HA updates the existing entities in place (no duplicates):
+    #   * topic must be <prefix>/<type>/<node_name>/<object_id>/config
+    #   * unique_id must match ESPHome's legacy generator:
+    #     "ESP" + <component type> + <object_id>
+    # Keep name/icon/options/min/max/step/unit here in sync with the entity
+    # definitions in the Control entities section.
+    - mqtt.publish:
+        topic: homeassistant/select/${device_name}/mode/config
+        retain: true
+        payload: !lambda |-
+          return std::string(
+            R"({"name":"Mode","icon":"mdi:thermostat","options":["Heat","Cool","Auto"],)"
+            R"("state_topic":"${device_name}/select/mode/state",)"
+            R"("command_topic":"${device_name}/select/mode/command",)"
+            R"("retain":true,"optimistic":true,"unique_id":"ESPselectmode",)"
+            R"("device":{"identifiers":[")") + get_mac_address() +
+            R"("],"name":"${friendly_name}"}})";
+    - mqtt.publish:
+        topic: homeassistant/number/${device_name}/target_temperature/config
+        retain: true
+        payload: !lambda |-
+          return std::string(
+            R"({"name":"Target Temperature","icon":"mdi:thermometer",)"
+            R"("device_class":"temperature","unit_of_measurement":"°C",)"
+            R"("min":15,"max":40,"step":0.5,)"
+            R"("state_topic":"${device_name}/number/target_temperature/state",)"
+            R"("command_topic":"${device_name}/number/target_temperature/command",)"
+            R"("retain":true,"optimistic":true,"unique_id":"ESPnumbertarget_temperature",)"
+            R"("device":{"identifiers":[")") + get_mac_address() +
+            R"("],"name":"${friendly_name}"}})";
   on_disconnect:
     - lambda: 'id(mqtt_connected) = false;'
   # Flag the moment the broker (re)delivers the retained Prevent Deep Sleep
@@ -639,6 +685,13 @@ ble_client:
 #   * optimistic + restore — the entity adopts the commanded value immediately
 #     and restores its last value from flash on boot (fallback before MQTT
 #     redelivers the retained command).
+#   * HA-side optimistic discovery — every control's discovery payload also
+#     carries `"optimistic": true` (switches natively via `assumed_state:`,
+#     number/select via the hand-published discovery in mqtt: on_connect), so
+#     the HA GUI reflects a change immediately even while the device sleeps,
+#     instead of snapping back to the stale retained state topic until the
+#     next wake. The state topic still corrects the GUI whenever the awake
+#     device publishes.
 # The verified sync_* scripts are unchanged — the ids match the old mirrors.
 switch:
   - platform: template
@@ -646,6 +699,12 @@ switch:
     id: desired_power_state
     icon: "mdi:power"
     optimistic: true
+    # assumed_state makes ESPHome add "optimistic":true to the MQTT discovery,
+    # so HA applies a toggle to the GUI immediately even while the device is
+    # asleep (it would otherwise snap back to the stale retained state topic
+    # until the next wake). HA renders the switch as two press-buttons instead
+    # of a slide toggle — the honest UI for a mostly-sleeping device.
+    assumed_state: true
     restore_mode: RESTORE_DEFAULT_OFF
     command_retain: true
     turn_on_action:
@@ -680,6 +739,10 @@ switch:
     icon: "mdi:sleep-off"
     entity_category: config
     optimistic: true
+    # HA-optimistic discovery — see the Power switch. Especially important
+    # here: turning this on while the device sleeps must visibly "stick" in
+    # the GUI, since it's the documented no-serial recovery path.
+    assumed_state: true
     restore_mode: RESTORE_DEFAULT_OFF
     command_retain: true
     turn_on_action:
@@ -718,6 +781,10 @@ select:
     optimistic: true
     restore_value: true
     command_retain: true
+    # Discovery is hand-published from mqtt: on_connect with "optimistic":true
+    # added (ESPHome's MQTT select cannot emit it) — keep the name/icon/options
+    # there in sync with this entity.
+    discovery: false
     options: ["Heat", "Cool", "Auto"]
     initial_option: "Heat"
     set_action:
@@ -747,6 +814,10 @@ number:
     optimistic: true
     restore_value: true
     command_retain: true
+    # Discovery is hand-published from mqtt: on_connect with "optimistic":true
+    # added (ESPHome's MQTT number cannot emit it) — keep the name/icon/min/
+    # max/step/unit there in sync with this entity.
+    discovery: false
     set_action:
       - if:
           condition:

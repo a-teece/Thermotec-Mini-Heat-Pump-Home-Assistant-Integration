@@ -257,6 +257,39 @@ reason to revisit, and update this section if they change.
     `enable_double_reset_wake` are consumer-facing substitutions (mirror them in
     `example-device.yaml`).
 
+12. **Control entities are HA-optimistic (`"optimistic": true` in discovery).**
+    Because the retained command topic is the source of truth (decision 1), a
+    control changed while the device sleeps *is* applied on the next wake — but
+    a non-optimistic HA entity snapped straight back to the stale retained
+    state topic, so the user couldn't see the requested value or tell it would
+    take effect. With `optimistic` set, HA adopts the commanded value
+    immediately, restores it across HA restarts, and still corrects from the
+    state topic whenever the awake device publishes (desired shows on the
+    control; confirmed actual state shows on the `current_*` sensors). How it's
+    wired, per entity type:
+    - **Switches** (`Power`, `Prevent Deep Sleep`): `assumed_state: true` —
+      ESPHome's MQTT switch translates that into `optimistic` in its own
+      discovery. HA renders them as two press-buttons instead of a toggle.
+    - **Select/Number** (`Mode`, `Target Temperature`): ESPHome's MQTT
+      select/number **cannot emit `optimistic` at all**, so these two set
+      per-entity `discovery: false` and the firmware hand-publishes their
+      discovery JSON (retained) from `mqtt: on_connect` — identical to what
+      ESPHome would send plus the one extra key. Two invariants keep HA
+      updating the existing entities in place instead of duplicating them: the
+      topic `homeassistant/<type>/${device_name}/<object_id>/config` and the
+      legacy-generator `unique_id` (`ESP<type><object_id>`, e.g.
+      `ESPnumbertarget_temperature`). If you rename these entities or change
+      their traits (options/min/max/step/icon), update the hand-published
+      payload in the `mqtt:` block to match — and remember a rename breaks the
+      unique_id continuity just like it would under native discovery. Remove
+      the hand-publishing only if ESPHome's MQTT select/number ever gain
+      `optimistic` support.
+    Known cosmetic quirk: during a wake the device republishes its
+    flash-restored state before the broker redelivers the retained command, so
+    a value changed during sleep can flicker to the old value for a second or
+    two before settling — self-corrects within the same wake, even if BLE
+    fails.
+
 ## Home Assistant setup
 
 **No manual HA helpers or template entities.** Since the MQTT transition
