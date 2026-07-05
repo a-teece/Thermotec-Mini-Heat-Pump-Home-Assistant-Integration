@@ -289,6 +289,22 @@ Toggle the **Prevent Deep Sleep** switch **on** in HA before the device's next w
 
 > **Always turn Prevent Deep Sleep on before attempting an OTA update.** If it's off when the flash begins, the device will go to sleep mid-transfer and the update will fail.
 
+### Recovering a stuck device
+
+A battery device is only awake briefly, so if it ever gets into a bad state the firmware provides two ways to get it back **without a USB/serial re-flash**:
+
+- **Automatic (recovery mode).** If the device wakes but repeatedly fails to reach the heat pump over BLE — `safe_mode_failure_threshold` consecutive wakes (default **3**) — it stops sleeping and stays awake, so it remains reachable for OTA and diagnosis instead of disappearing into deep sleep. The **Recovery Mode** binary sensor turns on and the **Consecutive Wake Failures** diagnostic sensor shows the count. It resumes normal operation after a reset/power-cycle once the underlying cause (e.g. heat pump powered off, or the AquaTemp app holding the BLE link) is resolved.
+- **Manual (double-reset).** Press the board's **reset button twice** while it's awake to force always-on mode — useful when the device can't reach WiFi/MQTT at all, so the HA **Prevent Deep Sleep** switch can't reach it. A normal single reset / power-cycle returns it to the normal sleep cycle.
+
+Both are tunable via `substitutions:` in your device file:
+
+| Substitution | Default | What it does |
+|--------------|---------|--------------|
+| `safe_mode_failure_threshold` | `"3"` | Consecutive failed wakes before the device stays awake in recovery mode. Raise to make it less eager; set very high to effectively disable. |
+| `enable_double_reset_wake` | `"true"` | Enable double-tap-reset to force always-on. Set `"false"` to disable it. |
+
+> **Tip:** alert on the **Recovery Mode** / **Consecutive Wake Failures** sensors (and a stale **Last Connected**) with an HA automation so you're notified when the bridge needs attention.
+
 ---
 
 ## Troubleshooting
@@ -301,6 +317,9 @@ Two common causes: the MAC address in `secrets.yaml` is wrong (check it matches 
 
 **OTA flash hangs or the device is unreachable for OTA**
 The device enters deep sleep roughly 20–30 seconds after booting. Turn the **Prevent Deep Sleep** switch **on** in HA, wait for the next wake cycle to pick it up, then attempt the OTA flash. See [Sleep mode and OTA](#sleep-mode-and-ota-updates).
+
+**The device stopped waking / won't respond to the Prevent Deep Sleep switch**
+If it's still on WiFi it should pick up the retained switch command on its next wake. If it can't reach WiFi/MQTT at all, the switch can't reach it either — press the board's **reset button twice** to force always-on mode, then flash or investigate over serial. Repeated failures to reach the heat pump also trip **Recovery Mode** automatically. See [Recovering a stuck device](#recovering-a-stuck-device).
 
 **Target temperature or mode does not sync to the heat pump**
 Changes are written only while the ESP is connected to the heat pump over BLE.
