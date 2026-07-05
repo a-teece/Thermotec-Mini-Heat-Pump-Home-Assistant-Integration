@@ -24,6 +24,27 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Fixed
+
+- **Changing a control while the device sleeps now shows in the HA GUI
+  immediately.** Setting the target temperature (or Power / Mode / Prevent
+  Deep Sleep) while the device was deep-sleeping *was* applied on the next
+  wake — the retained command topic is the source of truth — but Home
+  Assistant snapped the control straight back to the stale retained state, so
+  you couldn't see what you'd requested or tell whether it would take effect.
+  Every control's MQTT discovery now carries `"optimistic": true`: HA adopts
+  the commanded value at once, keeps it across HA restarts, and still corrects
+  from the state topic whenever the awake device publishes. The switches gain
+  this via `assumed_state`; the Mode select and Target Temperature number
+  can't (ESPHome's MQTT select/number never emit `optimistic`), so the device
+  now publishes their discovery payloads itself — identical topic, fields and
+  `unique_id`, so existing HA entities update in place with no user action.
+  Cosmetic side effects: the two switches render in HA as two press-buttons
+  instead of a slide toggle (the honest UI for an assumed state), and a
+  control may briefly show the previous value for a second or two during a
+  wake (the device republishes its restored state before the broker redelivers
+  the retained command).
+
 ## [v2.2.0] - 2026-07-05
 
 ### Fixed
