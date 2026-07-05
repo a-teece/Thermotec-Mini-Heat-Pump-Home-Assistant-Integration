@@ -87,10 +87,15 @@ reason to revisit, and update this section if they change.
    Each control also restores its last value from flash on boot.
 
 2. **Deep sleep is entered explicitly, never via `run_duration`.** The
-   `on_boot` handler runs the full wake cycle (wait for MQTT broker → receive
-   retained commands → connect BLE → poll → sync → settle) and only then calls
-   `deep_sleep.enter`. This guarantees we never sleep mid-BLE-write. A
-   `prevent_deep_sleep` switch keeps the device awake for OTA/debugging.
+   `on_boot` handler runs the full wake cycle (wait for MQTT broker → wait for
+   the retained commands to land → connect BLE → poll → sync → settle) and only
+   then calls `deep_sleep.enter`. This guarantees we never sleep mid-BLE-write.
+   A `prevent_deep_sleep` switch keeps the device awake for OTA/debugging;
+   crucially, on_boot waits on the `prevent_cmd_received` flag (set by an mqtt
+   `on_message` when the broker re-delivers the retained command) **before** the
+   sleep decision, so a "stay awake" request made while the device slept wins
+   deterministically instead of racing a fixed delay. See decision 11 for the
+   full recoverability story.
 
 3. **Target temperature is mode-aware.** Each operating mode stores its
    target in a different register (Heat `0x0416`, Cool `0x041B`, Auto
@@ -208,6 +213,44 @@ reason to revisit, and update this section if they change.
     via `Last Connected` / `Battery Level` / `Heat Pump BLE Connection` (alert
     on a stale `Last Connected`). Do not re-enable birth/will without restoring
     that distinction another way.
+
+11. **A deep-sleep device must stay recoverable over-the-air.** A battery
+    device is unreachable ~most of the time and boots straight into a sleep
+    decision, so a bad state must not require a physical serial re-flash to
+    clear. Three layers guard this (in `on_boot` / `enter_deep_sleep_scheduled`):
+    - **Deterministic prevent-sleep (fixes the boot-time race).** `on_boot`
+      Phase 2 waits on `prevent_cmd_received` (set by an mqtt `on_message` on the
+      prevent-sleep command topic) rather than a fixed 2 s delay, so the retained
+      `Prevent Deep Sleep = ON` is applied before Phase 3 decides to sleep.
+      Previously the fixed delay could elapse first and the device slept a full
+      cycle before honouring the switch — making the documented no-serial
+      recovery unreliable (a device could sleep-loop and ignore the switch).
+    - **Self-heal safe mode.** `consecutive_failures` (restored global) counts
+      wakes that fail to complete a poll+reconcile; a completed reconcile
+      (ble_client `on_connect`) or a successful wake (`on_boot` Phase 5b) resets
+      it. At `${safe_mode_failure_threshold}` (default 3) the device sets
+      `recovery_mode`, calls `deep_sleep.prevent`, and stays awake so a bridge
+      that reaches MQTT but not the heat pump is reachable for OTA instead of
+      vanishing into sleep. Surfaced as the `Recovery Mode` binary sensor and
+      the `Consecutive Wake Failures` diagnostic sensor. Recovery latches until a
+      reset/power-cycle (a later successful reconcile clears the counter but does
+      not, by itself, resume sleeping this session).
+    - **Double-reset → always-awake (physical, still no serial).** Gated by
+      `enable_double_reset_wake`. `drd_flag` (restored) is armed each boot and
+      cleared only on a *clean* `enter_deep_sleep_scheduled`; if the board is
+      reset while awake the flag survives, so the next boot sees it set → sets
+      `force_awake` (added to the Phase 3 stay-awake OR) → stays on. Covers the
+      case where WiFi/MQTT itself won't come up (so the switch can't help).
+      Costs two small extra flash writes per wake when enabled. Caveat: the
+      armed window is the whole wake, so an ungraceful reset/brown-out mid-wake
+      is also read as a double-reset — usually benign (a device that just
+      crashed is one you want reachable), but disable `enable_double_reset_wake`
+      if it proves a nuisance.
+    A genuinely dead WiFi/broker connection still needs serial — the accepted
+    last resort; these layers shrink the serial-required set to real
+    hardware/WiFi failures. `safe_mode_failure_threshold` and
+    `enable_double_reset_wake` are consumer-facing substitutions (mirror them in
+    `example-device.yaml`).
 
 ## Home Assistant setup
 

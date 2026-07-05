@@ -24,6 +24,33 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Prevent Deep Sleep` now takes effect reliably on a cold boot.** Previously
+  `on_boot` waited a fixed 2 s for the broker and then checked the switch, so a
+  "stay awake" request set while the device slept could lose the race — the
+  device would sleep for a full cycle (or keep sleep-looping) and ignore the
+  retained command, leaving a serial re-flash as the only way back in. `on_boot`
+  now waits deterministically for the retained command to be delivered (an mqtt
+  `on_message` sets a flag) before deciding whether to sleep.
+
+### Added
+
+- **Self-heal recovery mode.** After `safe_mode_failure_threshold` (default 3)
+  consecutive wake cycles that fail to reach the heat pump (BLE never connects /
+  reconcile never completes), the device stops sleeping and stays awake so it
+  stays reachable for OTA/diagnosis instead of disappearing into deep sleep. New
+  `Recovery Mode` binary sensor and `Consecutive Wake Failures` diagnostic
+  sensor surface this in HA — both worth alerting on alongside a stale
+  `Last Connected`.
+- **Double-reset-to-stay-awake.** Press the board's reset button twice while
+  it's awake to force always-on mode with no serial and no HA — the physical
+  recovery path for when WiFi/MQTT won't come up. A normal single reset /
+  power-cycle returns to normal sleeping. Toggle with the new
+  `enable_double_reset_wake` substitution (default `"true"`).
+- New consumer substitutions `safe_mode_failure_threshold` and
+  `enable_double_reset_wake` (mirrored in `example-device.yaml`).
+
 ## [v2.1.0] - 2026-07-04
 
 ### Added

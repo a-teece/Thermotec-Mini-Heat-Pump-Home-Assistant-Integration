@@ -72,6 +72,27 @@ substitutions:
   day_start_hour: "9"
   day_end_hour: "18"
 
+  # ─── Recovery / self-heal safeguards ────────────────────────────────────────
+  # A deep-sleep device is unreachable most of the time, so a bad state could
+  # otherwise only be cleared by a physical serial re-flash. These make it
+  # recoverable over-the-air.
+
+  # Consecutive wake cycles that fail to complete a poll + reconcile (BLE never
+  # connects, or the reconcile never finishes) after which the device stops
+  # sleeping and stays awake in "recovery mode" — so a bridge that can reach
+  # MQTT but not the heat pump stays reachable for OTA/diagnosis instead of
+  # sleep-looping out of reach. Auto-clears on the first successful wake. Note a
+  # long BLE contention with the AquaTemp app can also trip it; raise this to
+  # make recovery mode less eager, or set very high to effectively disable.
+  safe_mode_failure_threshold: "3"
+
+  # Double-reset-to-stay-awake: press the board's reset button twice while it is
+  # awake to force always-on mode with no serial and no HA — the physical
+  # recovery path for when WiFi/MQTT itself won't come up. A normal single
+  # reset / power-cycle returns to normal sleeping. "false" disables it (and
+  # avoids its two small extra flash writes per wake).
+  enable_double_reset_wake: "true"
+
   # ─── Hardware / board ───────────────────────────────────────────────────────
   # These default to the DFRobot FireBeetle 2 ESP32-C6 (the reference board).
   # When consuming this file as a remote ESPHome package, override any of these
@@ -128,6 +149,31 @@ globals:
     initial_value: '0'
     restore_value: no
 
+  # Set true by an mqtt on_message the instant the broker (re)delivers the
+  # retained "Prevent Deep Sleep" command on a wake. on_boot waits on this
+  # before the sleep decision, so a "stay awake" request made while the device
+  # slept is applied deterministically instead of racing — and losing to — the
+  # sleep decision. NOT restored: re-evaluated fresh each wake.
+  - id: prevent_cmd_received
+    type: bool
+    initial_value: 'false'
+    restore_value: no
+
+  # Forces always-awake for THIS boot session only, set by the double-reset
+  # detector. NOT restored, so a normal single reset / power-cycle clears it.
+  - id: force_awake
+    type: bool
+    initial_value: 'false'
+    restore_value: no
+
+  # True while the device is in self-heal recovery mode (staying awake after
+  # too many failed wakes). Drives the "Recovery Mode" binary sensor. NOT
+  # restored.
+  - id: recovery_mode
+    type: bool
+    initial_value: 'false'
+    restore_value: no
+
   # Set true by on_connect once it has finished reconciling HA helpers with
   # the heat pump (including any power-state retries). on_boot waits on this
   # before sleeping, so the device stays awake exactly as long as the
@@ -150,6 +196,26 @@ globals:
     type: char[24]
     restore_value: yes
 
+  # Consecutive failed wake cycles (BLE never connected or reconcile never
+  # finished). Reset to 0 on any successful wake; when it reaches
+  # ${safe_mode_failure_threshold} the device enters recovery mode (stays awake
+  # for OTA) instead of sleeping. Restored across deep sleep / power-cycle so
+  # the count is not lost between wakes; persisted by the
+  # global_preferences->sync() already run before each sleep.
+  - id: consecutive_failures
+    type: int
+    initial_value: '0'
+    restore_value: yes
+
+  # Double-reset detector. Armed (set true) early each boot and cleared just
+  # before a *clean* deep-sleep entry. If the board is reset while still awake
+  # the flag survives, so the next boot sees it still set → double reset →
+  # force always-awake. Restored across deep sleep / power-cycle.
+  - id: drd_flag
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
@@ -164,6 +230,31 @@ esphome:
     # Priority -100 places us late in the boot sequence.
     priority: -100.0
     then:
+      # ── Phase 0a: Double-reset → force always-awake (physical recovery) ──
+      # drd_flag is armed below on every boot and cleared only on a *clean*
+      # deep-sleep entry. So if it is already set here, the previous boot never
+      # reached a clean sleep — i.e. the board was reset again while awake:
+      # treat that as a double-reset request and stay awake for OTA/config (no
+      # serial or HA needed — the recovery path for when WiFi/MQTT is the
+      # problem). A normal single reset / power-cycle leaves force_awake false.
+      - if:
+          condition:
+            lambda: 'return ${enable_double_reset_wake};'
+          then:
+            - if:
+                condition:
+                  lambda: 'return id(drd_flag);'
+                then:
+                  - lambda: |-
+                      id(force_awake) = true;
+                      id(drd_flag) = false;   // disarm so a later single reset returns to sleeping
+                  - logger.log:
+                      level: INFO
+                      format: "Double-reset detected — staying awake (recovery mode)"
+                else:
+                  - lambda: 'id(drd_flag) = true;'   # arm for this boot; cleared on clean sleep
+            - lambda: 'global_preferences->sync();'
+
       # ── Phase 0: Republish Last Connected before MQTT connects ───────────
       # BLE-derived sensor values survive deep sleep via MQTT's retained state
       # topics — the broker re-delivers each entity's last value to HA on
@@ -189,11 +280,21 @@ esphome:
             lambda: 'return id(mqtt_connected);'
           timeout: 15s
 
-      # ── Phase 2: Let the broker deliver retained commands ───────────────
-      # On (re)connect the broker re-sends the retained command topics; a short
-      # delay ensures the desired_* controls reflect any value changed while we
-      # were asleep before the on_connect reconcile reads them.
-      - delay: 2s
+      # ── Phase 2: Wait for the retained control commands to be delivered ──
+      # The broker re-sends the retained command topics on (re)subscribe. Wait
+      # until the retained Prevent Deep Sleep command specifically has landed
+      # (prevent_cmd_received) rather than guessing a fixed delay — this is what
+      # makes a "stay awake" request set while the device slept take effect on
+      # the very next wake instead of racing, and losing to, the sleep decision
+      # below. command_retain guarantees the command exists, so this normally
+      # returns in well under a second; the 5s timeout is only a first-ever-boot
+      # safety net (no command retained yet). A short settle then lets the other
+      # retained commands (power/mode/target) arrive before on_connect reads them.
+      - wait_until:
+          condition:
+            lambda: 'return id(prevent_cmd_received);'
+          timeout: 5s
+      - delay: 1s
 
       # ── Phase 3: Decide between awake mode and a sleep cycle ────────────
       - if:
@@ -203,6 +304,8 @@ esphome:
             or:
               - switch.is_on: prevent_deep_sleep_switch
               - lambda: 'return !(${enable_deep_sleep});'
+              # Double-reset physical recovery (Phase 0a).
+              - lambda: 'return id(force_awake);'
           then:
             # ── AWAKE MODE: stay on (always-on build, OTA, debugging) ───
             - deep_sleep.prevent: deep_sleep_1
@@ -238,19 +341,60 @@ esphome:
                   lambda: 'return id(reconcile_done);'
                 timeout: 90s
 
-            # Phase 6: Refresh battery reading before sleep, pushed to HA just
-            # before we drop the WiFi link. (last_connected is stamped earlier,
-            # on time-sync — see the time: component — so it's not refreshed
-            # here; doing so would only re-stamp it ~13s later and double the
-            # logbook entries per wake.)
-            - component.update: battery_voltage
+            # ── Phase 5b: Self-heal bookkeeping ─────────────────────────────
+            # A wake "succeeded" only if BLE connected AND the reconcile ran to
+            # completion. Reset the failure counter on success, otherwise count
+            # it. This is what lets the device notice it has become useless
+            # (e.g. heat pump BLE unreachable) instead of silently sleep-looping.
+            # (A successful reconcile also resets the counter in the ble_client
+            # on_connect, covering the awake/recovery path where this does not run.)
+            - if:
+                condition:
+                  lambda: 'return id(ble_connected) && id(reconcile_done);'
+                then:
+                  - lambda: 'id(consecutive_failures) = 0;'
+                else:
+                  - lambda: 'if (id(consecutive_failures) < 1000) id(consecutive_failures) += 1;'
+                  - logger.log:
+                      level: WARN
+                      format: "Wake cycle incomplete (BLE/reconcile) — consecutive failures now %d"
+                      args: ['id(consecutive_failures)']
+            - component.update: consecutive_wake_failures
 
-            # Phase 7: Final settle time so HA receives everything.
-            - delay: 3s
+            # ── Phase 5c: Recovery mode — stay awake if too many failures ───
+            # After ${safe_mode_failure_threshold} consecutive failed wakes,
+            # stop sleeping and stay awake so the device is reachable for OTA /
+            # diagnosis over-the-air instead of disappearing into deep sleep.
+            # The 30s interval poll keeps retrying the heat pump; recovery mode
+            # latches until the next reset / power-cycle or a Prevent Deep Sleep
+            # toggle (a successful reconcile clears the counter but does not, on
+            # its own, resume sleeping this session).
+            - if:
+                condition:
+                  lambda: 'return id(consecutive_failures) >= ${safe_mode_failure_threshold};'
+                then:
+                  - lambda: 'id(recovery_mode) = true;'
+                  - deep_sleep.prevent: deep_sleep_1
+                  - logger.log:
+                      level: WARN
+                      format: "Recovery mode: %d consecutive failed wakes — staying awake for OTA/diagnosis"
+                      args: ['id(consecutive_failures)']
+                  # Persist the counter now (we won't reach the pre-sleep sync).
+                  - lambda: 'global_preferences->sync();'
+                else:
+                  # Phase 6: Refresh battery reading before sleep, pushed to HA
+                  # just before we drop the WiFi link. (last_connected is stamped
+                  # earlier, on time-sync — see the time: component — so it's not
+                  # refreshed here; doing so would only re-stamp it ~13s later and
+                  # double the logbook entries per wake.)
+                  - component.update: battery_voltage
 
-            # Phase 8: Enter deep sleep until the next wake cycle.
-            # Duration is chosen by enter_deep_sleep_scheduled based on time of day.
-            - script.execute: enter_deep_sleep_scheduled
+                  # Phase 7: Final settle time so HA receives everything.
+                  - delay: 3s
+
+                  # Phase 8: Enter deep sleep until the next wake cycle. Duration
+                  # is chosen by enter_deep_sleep_scheduled based on time of day.
+                  - script.execute: enter_deep_sleep_scheduled
 
 esp32:
   board: ${esp_board}
@@ -337,6 +481,15 @@ mqtt:
     - lambda: 'id(mqtt_connected) = true;'
   on_disconnect:
     - lambda: 'id(mqtt_connected) = false;'
+  # Flag the moment the broker (re)delivers the retained Prevent Deep Sleep
+  # command on a wake, so on_boot can wait for it deterministically before the
+  # sleep decision (fixes the boot-time race where a "stay awake" set during
+  # sleep was ignored because the fixed settle delay elapsed before the
+  # retained command landed). command_retain guarantees the command exists.
+  on_message:
+    - topic: ${device_name}/switch/prevent_deep_sleep/command
+      then:
+        - lambda: 'id(prevent_cmd_received) = true;'
 
 ota:
   - platform: esphome
@@ -446,8 +599,14 @@ ble_client:
         - script.execute: sync_all_settings
         - script.wait: sync_all_settings
 
-        # Reconcile finished — on_boot may now proceed to deep sleep.
-        - lambda: 'id(reconcile_done) = true;'
+        # Reconcile finished — on_boot may now proceed to deep sleep. A
+        # completed reconcile is the definition of a successful wake, so clear
+        # the self-heal failure counter here too (covers the awake/recovery
+        # path, where on_boot's Phase 5b bookkeeping does not run again).
+        - lambda: |-
+            id(reconcile_done) = true;
+            id(consecutive_failures) = 0;
+        - component.update: consecutive_wake_failures
 
     on_disconnect:
       then:
@@ -594,6 +753,18 @@ binary_sensor:
     name: "Heat Pump BLE Connection"
     device_class: connectivity
     lambda: 'return id(ble_connected);'
+
+  # ── Recovery mode (self-heal) ─────────────────────────────────────────────
+  # ON when the device has hit ${safe_mode_failure_threshold} consecutive
+  # failed wakes and is staying awake for OTA/diagnosis instead of sleeping.
+  # Latches until the next reset / power-cycle. Worth a Home Assistant alert.
+  - platform: template
+    id: recovery_mode_status
+    name: "Recovery Mode"
+    icon: "mdi:lifebuoy"
+    device_class: problem
+    entity_category: diagnostic
+    lambda: 'return id(recovery_mode);'
 
   # ─── Diagnostic outputs ───────────────────────────────────────────────────
   # output_compressor, output_circulate_pump, output_high_fan and output_4way_valve are 
@@ -1106,6 +1277,21 @@ sensor:
     accuracy_decimals: 1
     entity_category: diagnostic
 
+  # ── Consecutive Wake Failures (self-heal diagnostic) ──────────────────────
+  # Consecutive wake cycles that failed to complete a poll + reconcile. 0 =
+  # healthy; climbs when the heat pump BLE can't be reached. At
+  # ${safe_mode_failure_threshold} the device enters recovery mode (stays awake
+  # for OTA). Good to alert on in HA alongside a stale Last Connected.
+  - platform: template
+    name: "Consecutive Wake Failures"
+    id: consecutive_wake_failures
+    icon: "mdi:alert-decagram-outline"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+    lambda: 'return id(consecutive_failures);'
+
   # ── Battery Voltage ───────────────────────────────────────────────────────
   # The Firebeetle 2 ESP32-C6 has an onboard 1:1 voltage divider on GPIO0.
   # 12dB attenuation gives the ADC a ~3.1V max range; the multiply filter
@@ -1582,6 +1768,14 @@ script:
       # explicit sync the values written this wake would not survive the
       # imminent deep sleep. (BLE-derived sensor values are no longer persisted
       # here — MQTT's retained state topics carry them across sleep instead.)
+      #
+      # Also disarm the double-reset detector: this is a *clean* sleep entry, so
+      # the next wake must not mistake it for a reset-button double-press.
+      - if:
+          condition:
+            lambda: 'return ${enable_double_reset_wake};'
+          then:
+            - lambda: 'id(drd_flag) = false;'
       - lambda: 'global_preferences->sync();'
       - if:
           condition:
