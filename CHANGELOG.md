@@ -24,6 +24,8 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v2.2.0] - 2026-07-05
+
 ### Fixed
 
 - **A cold boot no longer sleeps prematurely with the wrong duration and no
