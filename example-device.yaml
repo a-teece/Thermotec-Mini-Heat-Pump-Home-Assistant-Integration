@@ -61,6 +61,16 @@ substitutions:
   # day_start_hour: "9"
   # day_end_hour: "18"
 
+  # ── Recovery / self-heal (optional) ───────────────────────────────────────
+  # Consecutive failed wakes (can't reach the heat pump) after which the device
+  # stays awake in "recovery mode" so it's reachable for OTA instead of
+  # sleep-looping. Raise to make it less eager; very high to effectively disable.
+  # safe_mode_failure_threshold: "3"
+  # Double-reset the board's reset button to force always-on mode (no serial /
+  # no HA needed) — physical recovery when WiFi/MQTT won't come up. "false"
+  # disables it (avoids two small extra flash writes per wake).
+  # enable_double_reset_wake: "true"
+
   # ── Hardware / board (optional) ───────────────────────────────────────────
   # Defaults target the DFRobot FireBeetle 2 ESP32-C6. Override for a
   # different ESP32 board. See the README § "Using a different ESP32 board".
