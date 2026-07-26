@@ -289,6 +289,13 @@ reason to revisit, and update this section if they change.
     a value changed during sleep can flicker to the old value for a second or
     two before settling — self-corrects within the same wake, even if BLE
     fails.
+    Both hand-published discovery messages use `qos: 1`. On a first-ever flash
+    there is no pre-existing native-discovery config for these two entities to
+    fall back on (unlike an install upgraded from before this decision, whose
+    old retained discovery keeps them working regardless), so this is the only
+    chance for the entity to ever be created — a device that's awake only
+    briefly per wake can't afford a dropped QoS 0 publish here (see
+    [#23](https://github.com/a-teece/Thermotec-Mini-Heat-Pump-Home-Assistant-Integration/issues/23)).
 
 ## Home Assistant setup
 

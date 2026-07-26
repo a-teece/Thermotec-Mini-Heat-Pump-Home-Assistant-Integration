@@ -520,6 +520,12 @@ mqtt:
     - mqtt.publish:
         topic: homeassistant/select/${device_name}/mode/config
         retain: true
+        # QoS 1: this is a brief-connection deep-sleep device, and unlike
+        # ESPHome's own native discovery (used by every other entity), HA has
+        # no earlier retained copy of this hand-rolled config to fall back on
+        # for a first-ever flash — a single dropped QoS 0 publish means the
+        # entity never appears. QoS 1 makes the broker ack it.
+        qos: 1
         payload: !lambda |-
           return std::string(
             R"({"name":"Mode","icon":"mdi:thermostat","options":["Heat","Cool","Auto"],)"
@@ -531,6 +537,8 @@ mqtt:
     - mqtt.publish:
         topic: homeassistant/number/${device_name}/target_temperature/config
         retain: true
+        # QoS 1 — see the Mode select's discovery publish above for why.
+        qos: 1
         payload: !lambda |-
           return std::string(
             R"({"name":"Target Temperature","icon":"mdi:thermometer",)"

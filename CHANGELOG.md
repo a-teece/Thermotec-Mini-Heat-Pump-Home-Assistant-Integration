@@ -44,6 +44,16 @@ Version numbers follow Semantic Versioning:
   control may briefly show the previous value for a second or two during a
   wake (the device republishes its restored state before the broker redelivers
   the retained command).
+- **Mode and Target Temperature could fail to appear in HA on a first-ever
+  flash.** The hand-published discovery messages added above (for `optimistic`
+  support) were sent at QoS 0 — fine for an existing install, where the older
+  native-discovery config from before this change is still retained on the
+  broker and keeps the entities working regardless, but a brand-new device has
+  no such fallback: it depends entirely on that one publish landing during its
+  first, brief awake window. A single dropped packet meant the entity never
+  appeared, even though its state topic published normally (see
+  [#23](https://github.com/a-teece/Thermotec-Mini-Heat-Pump-Home-Assistant-Integration/issues/23)).
+  Both discovery publishes now use QoS 1 so the broker acknowledges them.
 
 ## [v2.2.0] - 2026-07-05
 
