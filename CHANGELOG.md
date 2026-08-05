@@ -24,6 +24,8 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v2.3.0] - 2026-08-05
+
 ### Added
 
 - **Battery percentage curve is now calibratable.** `Battery Level` was a
