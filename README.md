@@ -80,6 +80,8 @@ Any ESP32 board with BLE support and ESP-IDF framework compatibility should work
 | `esp_variant` | `ESP32C6` | The `variant:` in the `esp32:` block (e.g. `ESP32`, `ESP32S3`) |
 | `battery_adc_pin` | `GPIO0` | The ADC pin wired to the battery sense line |
 | `battery_voltage_multiplier` | `"2.0"` | Compensates for the board's voltage divider |
+| `battery_voltage_empty` | `"3.0"` | Voltage that maps to 0% on the Battery Level sensor |
+| `battery_voltage_full` | `"4.2"` | Voltage that maps to 100% on the Battery Level sensor |
 
 ```yaml
 # In your device YAML's substitutions: block
@@ -91,6 +93,19 @@ substitutions:
 ```
 
 > The `battery_voltage_multiplier` default of `2.0` assumes a 1:1 voltage divider, as found on the FireBeetle 2. If your board does not have this divider, set it to `1.0`; for any other divider ratio, set it to match. If your board is not battery-powered at all, you can simply ignore the battery voltage and battery level entities (hide or disable them in Home Assistant).
+
+### Battery calibration
+
+`Battery Level` is a linear map of `Battery Voltage` between `battery_voltage_empty` (0%) and `battery_voltage_full` (100%). LiPo cells don't discharge linearly, though — voltage stays fairly flat for most of the discharge, then sags hard under WiFi/BLE load once the cell nears empty (the "cliff"). A real capture from the reference unit: voltage declined gently from 3.76 V to 3.00 V over about two days, then collapsed to 2.61 V in around 12 minutes, and the device stayed unreachable for almost 15 hours before recovering.
+
+If your device dies while `Battery Level` still reads well above 0%, your cell/board is collapsing at a higher voltage than the default assumes. Pull your device's `*_battery_voltage` entity history in Home Assistant (Developer Tools → History, or a longer-range query if you have a history/logbook integration) around the time it went dark, find the voltage where it collapsed, and set `battery_voltage_empty` just above that:
+
+```yaml
+substitutions:
+  battery_voltage_empty: "3.3"   # example — use your own observed collapse voltage
+```
+
+This won't add runtime, but it makes 0% mean "about to die" instead of "already collapsing." For advance warning before the cliff — rather than waiting for 0% — build a Home Assistant automation that alerts on `Battery Voltage` or `Battery Level` crossing a threshold of your choosing, the same way you'd alert on a stale `Last Connected` (see the tip further down).
 
 ---
 
@@ -246,7 +261,7 @@ Connect a 3.7 V LiPo cell to the FireBeetle 2's battery connector:
 - The ESP wakes on a day/night schedule, connects to the heat pump, syncs any pending control changes, polls sensor data, pushes everything to HA, then returns to deep sleep.
 - Changes made to the controls (power, mode, temperature) while the ESP is asleep are retained by MQTT and applied on the next wake.
 - While the ESP sleeps, its entities keep showing their **last reported value** rather than going `unavailable` — the values are retained on the MQTT broker. Use the `Last Connected` heartbeat (and `Battery Level` / `Heat Pump BLE Connection`) to tell whether the bridge is actually alive; a stale `Last Connected` is the signal that it has stopped waking. (You can build an HA automation that alerts when `Last Connected` is older than ~20 minutes.)
-- Battery voltage and charge percentage are reported as diagnostic entities.
+- Battery voltage and charge percentage are reported as diagnostic entities. See [Battery calibration](#battery-calibration) if the device dies before Battery Level reaches 0%.
 
 The sleep durations and day window are all configurable in the `substitutions:` block at the top of `pool-heatpump-proxy.yaml` — see [Sleep schedule](#sleep-schedule) below.
 

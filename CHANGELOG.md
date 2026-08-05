@@ -24,6 +24,18 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Added
+
+- **Battery percentage curve is now calibratable.** `Battery Level` was a
+  hardcoded linear map (3.0V = 0%, 4.2V = 100%). LiPo cells sag hard under
+  load once nearly empty (the "cliff"), so a device can brown out at a
+  voltage well above where that fixed curve would predict, leaving the
+  battery entity showing a misleadingly high percentage right up to the
+  crash. The two endpoints are now substitutions —
+  `battery_voltage_empty` / `battery_voltage_full` (defaults unchanged) — so
+  you can calibrate 0% to the voltage your own hardware actually collapses
+  at. See the README § "Battery calibration".
+
 ### Fixed
 
 - **Changing a control while the device sleeps now shows in the HA GUI

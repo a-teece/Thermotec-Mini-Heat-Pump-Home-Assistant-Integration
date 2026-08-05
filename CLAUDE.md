@@ -297,6 +297,29 @@ reason to revisit, and update this section if they change.
     briefly per wake can't afford a dropped QoS 0 publish here (see
     [#23](https://github.com/a-teece/Thermotec-Mini-Heat-Pump-Home-Assistant-Integration/issues/23)).
 
+13. **Battery percentage curve is calibratable, not hardcoded — LiPo cells
+    have a voltage cliff.** `Battery Level` maps `Battery Voltage` linearly
+    between two substitutions, `battery_voltage_empty` (0%, default `3.0`)
+    and `battery_voltage_full` (100%, default `4.2`) — previously these were
+    hardcoded constants in the lambda. A real HA history pull from the
+    reference unit's `sensor.*_battery_voltage` showed why fixed constants
+    are wrong for some units: voltage declined gently from 3.76V to 3.00V
+    over ~2 days, then collapsed to 2.61V in ~12 minutes once it crossed
+    3.0V, and the device stayed unreachable for almost 15 hours before
+    recovering — i.e. by the time `Battery Level` neared 0% under the old
+    fixed curve, the device was already mid-collapse, not merely "low."
+    Different cells/boards (age, chemistry, wiring losses, ESP32 variant
+    brownout threshold) collapse at different voltages, so this can't be a
+    single constant that fits every deployment — same reasoning as
+    `battery_adc_pin`/`battery_voltage_multiplier` already being
+    substitutions. **Deliberately not addressed with a device-side
+    "low battery" entity**: the device already publishes both `Battery
+    Voltage` and `Battery Level`, so a user wanting advance warning before
+    the cliff should build a Home Assistant automation thresholding one of
+    those (same pattern as the `Last Connected` dead-bridge watchdog) rather
+    than have the firmware duplicate that inference. See README §
+    "Battery calibration" for the user-facing calibration workflow.
+
 ## Home Assistant setup
 
 **No manual HA helpers or template entities.** Since the MQTT transition

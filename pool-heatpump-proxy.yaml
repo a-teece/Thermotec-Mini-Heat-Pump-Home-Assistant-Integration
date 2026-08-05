@@ -115,6 +115,26 @@ substitutions:
   battery_adc_pin: GPIO0
   battery_voltage_multiplier: "2.0"
 
+  # battery_voltage_empty / battery_voltage_full: the two endpoints of the
+  # linear voltage-to-percentage curve used by the Battery Level sensor
+  # (0% at empty, 100% at full). Defaults (3.0V / 4.2V) are typical single-cell
+  # LiPo limits, but LiPo cells don't discharge linearly — voltage sags hard
+  # under load ("the cliff") once the cell nears empty, so a device can
+  # brown out at a voltage well above where a resting-voltage curve would
+  # predict. A real capture from this project's reference unit: voltage
+  # declined gently from 3.76V to 3.00V over ~2 days, then collapsed to 2.61V
+  # in about 12 minutes, and the device stayed dark for almost 15 hours
+  # before recovering. If your device dies while Battery Level still reads
+  # well above 0%, pull your own `*_battery_voltage` entity's history (e.g.
+  # via a Home Assistant history/logbook query) to find the actual collapse
+  # voltage, and raise battery_voltage_empty to just above it — this won't
+  # give you more runtime, but it makes 0% mean "about to die" instead of
+  # "already collapsing". For advance warning before the cliff, build a Home
+  # Assistant automation on Battery Voltage or Battery Level rather than
+  # waiting for 0% (see the README).
+  battery_voltage_empty: "3.0"
+  battery_voltage_full: "4.2"
+
 # ─── Globals ────────────────────────────────────────────────────────────────
 globals:
   # Tracks whether the BLE link to the heat pump is up.
@@ -1426,7 +1446,8 @@ sensor:
         - component.update: battery_level
 
   # ── Battery Percentage (derived from voltage) ─────────────────────────────
-  # Simple linear curve: 3.0V = 0%, 4.2V = 100%. Good enough as a rough
+  # Simple linear curve between the battery_voltage_empty / battery_voltage_full
+  # substitutions (default 3.0V = 0%, 4.2V = 100%). Good enough as a rough
   # state-of-charge indicator. For better accuracy, replace with a
   # piecewise discharge curve specific to your cell chemistry.
   - platform: template
@@ -1441,7 +1462,9 @@ sensor:
     lambda: |-
       float v = id(battery_voltage).state;
       if (isnan(v)) return {};
-      float pct = (v - 3.0f) / (4.2f - 3.0f) * 100.0f;
+      float empty = ${battery_voltage_empty};
+      float full = ${battery_voltage_full};
+      float pct = (v - empty) / (full - empty) * 100.0f;
       return clamp(pct, 0.0f, 100.0f);
 
 # ─── Text Sensors ───────────────────────────────────────────────────────────

@@ -79,6 +79,14 @@ substitutions:
   # battery_adc_pin: GPIO0
   # battery_voltage_multiplier: "2.0"   # 1.0 if your board has no divider
 
+  # ── Battery percentage calibration (optional) ─────────────────────────────
+  # Voltage endpoints for the 0%/100% curve. LiPo cells sag hard under load
+  # near empty (the "cliff"), so if your device dies while Battery Level
+  # still reads well above 0%, raise battery_voltage_empty to match the
+  # voltage it actually collapses at. See the README § "Battery calibration".
+  # battery_voltage_empty: "3.0"
+  # battery_voltage_full: "4.2"
+
 # ── Remote package: the actual firmware, pulled from GitHub ─────────────────
 packages:
   thermotec_heatpump:
