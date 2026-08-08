@@ -24,6 +24,16 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Added
+
+- **Optional external water temperature probe.** A DS18B20 (1-Wire) probe can
+  now be wired to a customizable GPIO pin (`water_temp_sensor_pin`, default
+  `GPIO2`) to report a "Pool Water Temperature" sensor — distinct from the
+  heat pump's own Inlet/Outlet Water Temperature, which read at the heat
+  pump's plumbing rather than the pool itself. Purely optional hardware: with
+  no probe wired the entity simply stays unavailable. See the README §
+  "Optional: external water temperature probe".
+
 ## [v2.3.0] - 2026-08-05
 
 ### Added

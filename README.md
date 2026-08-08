@@ -32,6 +32,7 @@ Once running, the following entities appear in Home Assistant:
 |--------|------|-------------|
 | Inlet Water Temperature | Sensor | Water temperature entering the heat pump |
 | Outlet Water Temperature | Sensor | Water temperature leaving the heat pump |
+| Pool Water Temperature | Sensor | *(Optional)* Reading from an external DS18B20 probe on a customizable GPIO pin — see [Optional: external water temperature probe](#optional-external-water-temperature-probe) |
 | Ambient Temperature | Sensor | Outside air temperature at the unit |
 | Coil Temperature | Sensor | Refrigerant coil temperature |
 | Exhaust Temperature | Sensor | Exhaust gas temperature |
@@ -82,6 +83,7 @@ Any ESP32 board with BLE support and ESP-IDF framework compatibility should work
 | `battery_voltage_multiplier` | `"2.0"` | Compensates for the board's voltage divider |
 | `battery_voltage_empty` | `"3.0"` | Voltage that maps to 0% on the Battery Level sensor |
 | `battery_voltage_full` | `"4.2"` | Voltage that maps to 100% on the Battery Level sensor |
+| `water_temp_sensor_pin` | `GPIO2` | The GPIO pin wired to an optional external DS18B20 water temperature probe — see [Optional: external water temperature probe](#optional-external-water-temperature-probe) |
 
 ```yaml
 # In your device YAML's substitutions: block
@@ -106,6 +108,27 @@ substitutions:
 ```
 
 This won't add runtime, but it makes 0% mean "about to die" instead of "already collapsing." For advance warning before the cliff — rather than waiting for 0% — build a Home Assistant automation that alerts on `Battery Voltage` or `Battery Level` crossing a threshold of your choosing, the same way you'd alert on a stale `Last Connected` (see the tip further down).
+
+### Optional: external water temperature probe
+
+The heat pump already reports **Inlet** and **Outlet Water Temperature** over BLE — but those are read at the heat pump's own plumbing, not the pool/spa itself. If you'd rather measure the actual pool water temperature (e.g. a probe dropped in the pool, or clipped to a return jet), wire a **DS18B20** (or other 1-Wire compatible) probe to a free GPIO pin and it will appear in HA as **Pool Water Temperature**.
+
+This is entirely optional hardware — the firmware always includes the sensor, but if you don't wire a probe, the entity simply stays unavailable and nothing else depends on it.
+
+Wiring (standard 1-Wire):
+
+- DS18B20 **data** pin → your chosen GPIO (`water_temp_sensor_pin`, default `GPIO2`)
+- A **~4.7 kΩ pull-up resistor** between the data line and 3.3 V
+- DS18B20 **VDD** → 3.3 V, **GND** → GND
+
+Override the pin in your device file if `GPIO2` conflicts with something else on your board (check your board's pinout first, and avoid any pin already used by another substitution, e.g. `battery_adc_pin`):
+
+```yaml
+substitutions:
+  water_temp_sensor_pin: GPIO4
+```
+
+If you don't want the entity at all (no probe, ever), you can just ignore/hide it in HA — same as the battery sensors on a non-battery board.
 
 ---
 

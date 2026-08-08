@@ -135,6 +135,18 @@ substitutions:
   battery_voltage_empty: "3.0"
   battery_voltage_full: "4.2"
 
+  # ─── Optional external water temperature probe ─────────────────────────────
+  # A DS18B20 (or other 1-Wire) probe on a single, customizable GPIO pin —
+  # e.g. dropped directly into the pool/spa water, independent of the heat
+  # pump's own Inlet/Outlet Water Temperature sensors (which read the heat
+  # pump's internal plumbing over BLE, not the pool itself). This is entirely
+  # optional hardware: if you don't wire a probe, the "Pool Water Temperature"
+  # entity simply stays unavailable — nothing else in the firmware depends on
+  # it. Needs a ~4.7kΩ pull-up resistor between the data line and 3.3V
+  # (standard 1-Wire wiring). Check your board's pinout before overriding —
+  # avoid any pin already used by another substitution (e.g. battery_adc_pin).
+  water_temp_sensor_pin: GPIO2
+
 # ─── Globals ────────────────────────────────────────────────────────────────
 globals:
   # Tracks whether the BLE link to the heat pump is up.
@@ -424,6 +436,10 @@ esphome:
                   # refreshed here; doing so would only re-stamp it ~13s later and
                   # double the logbook entries per wake.)
                   - component.update: battery_voltage
+                  # Refresh the optional external water temperature probe too —
+                  # same reasoning as battery_voltage: its update_interval alone
+                  # isn't reliably reached within a short wake.
+                  - component.update: pool_water_temp
 
                   # Phase 7: Final settle time so HA receives everything.
                   - delay: 3s
@@ -703,6 +719,15 @@ ble_client:
         - logger.log: "Heat pump disconnected"
         - lambda: 'id(ble_connected) = false;'
 
+# ─── 1-Wire (optional external water temperature probe) ────────────────────
+# Independent of the heat pump's BLE link — just a bus for an optional
+# DS18B20 probe on ${water_temp_sensor_pin}. See the substitutions block for
+# details. Harmless if nothing is wired: the bus simply finds no devices.
+one_wire:
+  - platform: gpio
+    pin: ${water_temp_sensor_pin}
+    id: water_temp_bus
+
 # ─── Control entities (Home Assistant–native, auto-published via MQTT) ───────
 # These replace the old input_* helpers + `platform: homeassistant` mirrors:
 # the device now owns its Power switch, Mode select, Target number and a
@@ -797,6 +822,7 @@ switch:
                 level: INFO
                 format: "Prevent deep sleep disabled — sleeping shortly"
             - component.update: battery_voltage
+            - component.update: pool_water_temp
             - component.update: last_connected
             - delay: 5s
             - script.execute: enter_deep_sleep_scheduled
@@ -1040,6 +1066,29 @@ binary_sensor:
 
 # ─── Sensors ────────────────────────────────────────────────────────────────
 sensor:
+  # ── Optional external water temperature probe (DS18B20 on 1-Wire) ─────────
+  # Distinct from Inlet/Outlet Water Temperature below (which read the heat
+  # pump's own plumbing over BLE) — this is for a probe placed directly in
+  # the pool/spa water, wired to ${water_temp_sensor_pin}. Optional hardware:
+  # with nothing wired this entity just stays unavailable.
+  # update_interval matches the 30s poll cadence used while awake; explicit
+  # component.update calls (on_boot Phase 6, and the Prevent Deep Sleep
+  # switch's turn_off_action) guarantee a fresh reading before a short sleep
+  # wake — 30s alone isn't reliably reached within the ~20-30s wake window
+  # (same reasoning as Battery Voltage's manual update).
+  - platform: dallas_temp
+    one_wire_id: water_temp_bus
+    index: 0
+    name: "Pool Water Temperature"
+    id: pool_water_temp
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 30s
+    filters:
+      - delta: 0.05   # only publish if value moved more than 0.05°C
+
   # ── BLE Notification Parser (internal) ────────────────────────────────────
   # This sensor subscribes to BLE notifications from the heat pump and parses
   # each Modbus reply into the real sensors below. It has no value of its

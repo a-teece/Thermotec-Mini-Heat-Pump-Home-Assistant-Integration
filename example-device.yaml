@@ -87,6 +87,14 @@ substitutions:
   # battery_voltage_empty: "3.0"
   # battery_voltage_full: "4.2"
 
+  # ── Optional external water temperature probe ─────────────────────────────
+  # Wire a DS18B20 (1-Wire) probe — e.g. dropped in the pool — to a free GPIO
+  # pin to get a "Pool Water Temperature" entity, distinct from the heat
+  # pump's own Inlet/Outlet Water Temperature. Optional: leave unwired and the
+  # entity just stays unavailable. See the README §
+  # "Optional: external water temperature probe".
+  # water_temp_sensor_pin: GPIO2
+
 # ── Remote package: the actual firmware, pulled from GitHub ─────────────────
 packages:
   thermotec_heatpump:
