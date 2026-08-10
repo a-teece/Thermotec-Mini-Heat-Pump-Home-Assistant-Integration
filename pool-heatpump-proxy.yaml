@@ -237,7 +237,10 @@ globals:
   # boot, so an empty first byte means "nothing stored yet". Persisted to
   # flash by global_preferences->sync() just before deep sleep.
   - id: last_connected_str
-    type: char[24]
+    # 32, not 20 (the actual "YYYY-MM-DD HH:MM:SS\0" length): ESPTime's year
+    # field is uint16_t, so GCC's -Wformat-truncation sizes %04d for its full
+    # 5-digit worst case (65535) and flags char[24] as too small to prove safe.
+    type: char[32]
     restore_value: yes
 
   # Consecutive failed wake cycles (BLE never connected or reconcile never

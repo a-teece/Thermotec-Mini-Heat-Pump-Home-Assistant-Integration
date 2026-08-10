@@ -34,6 +34,13 @@ Version numbers follow Semantic Versioning:
   no probe wired the entity simply stays unavailable. See the README §
   "Optional: external water temperature probe".
 
+### Fixed
+
+- Silence a `-Wformat-truncation` compiler warning when formatting
+  `Last Connected` — `last_connected_str` is now `char[32]` (was `char[24]`),
+  large enough for GCC to prove safe against the worst-case width of
+  ESPTime's `uint16_t` year field.
+
 ## [v2.3.0] - 2026-08-05
 
 ### Added
