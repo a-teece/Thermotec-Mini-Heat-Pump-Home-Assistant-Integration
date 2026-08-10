@@ -24,6 +24,8 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v2.4.0] - 2026-08-10
+
 ### Added
 
 - **Optional external water temperature probe.** A DS18B20 (1-Wire) probe can
