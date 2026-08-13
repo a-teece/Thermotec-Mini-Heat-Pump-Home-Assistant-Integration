@@ -500,6 +500,7 @@ logger:
 # sleeps is applied on the next wake) via the per-entity `command_retain: true`
 # set on each control switch/number/select — see the Control entities section.
 mqtt:
+  id: mqtt_client
   broker: !secret mqtt_broker
   port: ${mqtt_port}
   username: !secret mqtt_username
@@ -535,59 +536,13 @@ mqtt:
   on_connect:
     - lambda: 'id(mqtt_connected) = true;'
     # ── Hand-published discovery for Mode + Target Temperature ──────────────
-    # Every control needs `"optimistic": true` in its HA discovery payload so
-    # the HA GUI adopts a change IMMEDIATELY, even while the device is deep
-    # asleep. Without it HA is non-optimistic: it publishes the (retained)
-    # command but snaps the control straight back to the stale retained state
-    # topic, so a user setting the temperature during sleep can't see what
-    # they requested — even though the retained command WILL be applied on the
-    # next wake. In optimistic mode HA shows the commanded value at once,
-    # restores it across HA restarts, and still corrects from the state topic
-    # whenever the awake device publishes.
-    # ESPHome's MQTT switch emits `optimistic` from `assumed_state:` (used by
-    # the Power / Prevent Deep Sleep switches below), but its number/select
-    # components cannot emit it at all — so those two entities set
-    # `discovery: false` and equivalent payloads (identical except for the
-    # added "optimistic") are published here instead, retained, on every
-    # connect (mirroring when ESPHome sends its own discovery).
-    # CRITICAL so HA updates the existing entities in place (no duplicates):
-    #   * topic must be <prefix>/<type>/<node_name>/<object_id>/config
-    #   * unique_id must match ESPHome's legacy generator:
-    #     "ESP" + <component type> + <object_id>
-    # Keep name/icon/options/min/max/step/unit here in sync with the entity
-    # definitions in the Control entities section.
-    - mqtt.publish:
-        topic: homeassistant/select/${device_name}/mode/config
-        retain: true
-        # QoS 1: this is a brief-connection deep-sleep device, and unlike
-        # ESPHome's own native discovery (used by every other entity), HA has
-        # no earlier retained copy of this hand-rolled config to fall back on
-        # for a first-ever flash — a single dropped QoS 0 publish means the
-        # entity never appears. QoS 1 makes the broker ack it.
-        qos: 1
-        payload: !lambda |-
-          return std::string(
-            R"({"name":"Mode","icon":"mdi:thermostat","options":["Heat","Cool","Auto"],)"
-            R"("state_topic":"${device_name}/select/mode/state",)"
-            R"("command_topic":"${device_name}/select/mode/command",)"
-            R"("retain":true,"optimistic":true,"unique_id":"ESPselectmode",)"
-            R"("device":{"identifiers":[")") + get_mac_address() +
-            R"("],"name":"${friendly_name}"}})";
-    - mqtt.publish:
-        topic: homeassistant/number/${device_name}/target_temperature/config
-        retain: true
-        # QoS 1 — see the Mode select's discovery publish above for why.
-        qos: 1
-        payload: !lambda |-
-          return std::string(
-            R"({"name":"Target Temperature","icon":"mdi:thermometer",)"
-            R"("device_class":"temperature","unit_of_measurement":"°C",)"
-            R"("min":15,"max":40,"step":0.5,)"
-            R"("state_topic":"${device_name}/number/target_temperature/state",)"
-            R"("command_topic":"${device_name}/number/target_temperature/command",)"
-            R"("retain":true,"optimistic":true,"unique_id":"ESPnumbertarget_temperature",)"
-            R"("device":{"identifiers":[")") + get_mac_address() +
-            R"("],"name":"${friendly_name}"}})";
+    # See the publish_hand_rolled_discovery script (Scripts section) for the
+    # payloads and the full explanation of why these two are hand-published
+    # at all. Deferred to a script rather than called directly here — see
+    # that script's comment for why this on_connect handler must NOT publish
+    # QoS>0 messages itself (issue #23, reopened: the QoS 1 fix alone did not
+    # actually resolve this on a real fresh device).
+    - script.execute: publish_hand_rolled_discovery
   on_disconnect:
     - lambda: 'id(mqtt_connected) = false;'
   # Flag the moment the broker (re)delivers the retained Prevent Deep Sleep
@@ -1644,6 +1599,70 @@ text_sensor:
 
 # ─── Scripts ────────────────────────────────────────────────────────────────
 script:
+  # Hand-published discovery for Mode + Target Temperature — see decision 12
+  # in CLAUDE.md for the full "why not native discovery" background.
+  #
+  # Issue #23 ("Mode and Target Temperature not exposed in HA"), closed after
+  # switching these two publishes to QoS 1 — but reopened, because the QoS 1
+  # fix alone did NOT actually resolve it on a genuinely fresh device (no
+  # prior retained discovery to fall back on). Both entities' state topics
+  # published and updated completely normally the whole time; only the
+  # discovery config publish itself never landed.
+  #
+  # Working theory: these were previously called directly from mqtt:
+  # on_connect, i.e. from inside the MQTT client's own connect-event
+  # callback. esp-idf's esp-mqtt client has a known failure mode where a
+  # QoS>0 publish issued from within that same callback can never complete —
+  # the client can't process the broker's PUBACK while it's still inside its
+  # own event handler, so the publish silently stalls/drops instead of
+  # erroring. QoS 0 publishes (every other entity's native discovery, and
+  # these two entities' own state topics) aren't affected because they don't
+  # wait for an ack at all — which is exactly why the rest of the device
+  # always worked while only these two, QoS-1-from-on_connect, publishes
+  # failed.
+  #
+  # Fix: don't publish from on_connect directly. on_connect just triggers
+  # this script; the delay below yields back to the scheduler/main loop
+  # first, so the actual QoS 1 publish happens from ESPHome's normal loop()
+  # context instead of the raw mqtt event callback, where the client is free
+  # to process the PUBACK. logger.log calls capture the lambda publish()
+  # call's own return value (queued locally, independent of broker ACK) so a
+  # future boot log makes it obvious whether this was in fact the bug.
+  #
+  # CRITICAL so HA updates the existing entities in place (no duplicates):
+  #   * topic must be <prefix>/<type>/<node_name>/<object_id>/config
+  #   * unique_id must match ESPHome's legacy generator:
+  #     "ESP" + <component type> + <object_id>
+  # Keep name/icon/options/min/max/step/unit here in sync with the entity
+  # definitions in the Control entities section.
+  - id: publish_hand_rolled_discovery
+    then:
+      - delay: 50ms
+      - lambda: |-
+          std::string payload = std::string(
+            R"({"name":"Mode","icon":"mdi:thermostat","options":["Heat","Cool","Auto"],)"
+            R"("state_topic":"${device_name}/select/mode/state",)"
+            R"("command_topic":"${device_name}/select/mode/command",)"
+            R"("retain":true,"optimistic":true,"unique_id":"ESPselectmode",)"
+            R"("device":{"identifiers":[")") + get_mac_address() +
+            R"("],"name":"${friendly_name}"}})";
+          bool ok = id(mqtt_client).publish(
+              "homeassistant/select/${device_name}/mode/config", payload, 1, true);
+          ESP_LOGI("discovery", "Mode discovery publish() returned %s", ok ? "true" : "false");
+      - lambda: |-
+          std::string payload = std::string(
+            R"({"name":"Target Temperature","icon":"mdi:thermometer",)"
+            R"("device_class":"temperature","unit_of_measurement":"°C",)"
+            R"("min":15,"max":40,"step":0.5,)"
+            R"("state_topic":"${device_name}/number/target_temperature/state",)"
+            R"("command_topic":"${device_name}/number/target_temperature/command",)"
+            R"("retain":true,"optimistic":true,"unique_id":"ESPnumbertarget_temperature",)"
+            R"("device":{"identifiers":[")") + get_mac_address() +
+            R"("],"name":"${friendly_name}"}})";
+          bool ok = id(mqtt_client).publish(
+              "homeassistant/number/${device_name}/target_temperature/config", payload, 1, true);
+          ESP_LOGI("discovery", "Target Temperature discovery publish() returned %s", ok ? "true" : "false");
+
   # Apply all desired settings to the heat pump, SERIALISED so that no two BLE
   # writes ever overlap. The heat pump's single GATT link can't take
   # back-to-back/concurrent writes — the colliding one is dropped (un-ACK'd) —
