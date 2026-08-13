@@ -24,6 +24,8 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v2.4.1] - 2026-08-13
+
 ### Fixed
 
 - **Mode and Target Temperature could still fail to appear in HA on a fresh
@@ -39,7 +41,8 @@ Version numbers follow Semantic Versioning:
   scheduler first, so the actual publish happens from the normal loop()
   context instead. Also added explicit `publish()` return-value logging so
   a future recurrence is immediately diagnosable from the boot log alone.
-  See #23 (reopened).
+  Confirmed fixed on a real device with no fallback discovery to hide behind
+  this time. Closes #23.
 
 ## [v2.4.0] - 2026-08-10
 
