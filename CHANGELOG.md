@@ -24,6 +24,26 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v2.4.1] - 2026-08-13
+
+### Fixed
+
+- **Mode and Target Temperature could still fail to appear in HA on a fresh
+  device, despite the QoS 1 fix for #23.** That fix was closed without ever
+  being confirmed on a device with no pre-existing retained discovery to
+  fall back on, and turned out not to have fixed the underlying bug. The
+  likely real cause: both hand-published discovery messages were published
+  directly from `mqtt: on_connect` — i.e. from inside the MQTT client's own
+  connect-event callback — where a QoS>0 publish can silently stall/drop
+  under esp-idf's esp-mqtt client, since it can't process the broker's
+  PUBACK while still inside its own event handler. `on_connect` now only
+  triggers a script (`publish_hand_rolled_discovery`) that yields to the
+  scheduler first, so the actual publish happens from the normal loop()
+  context instead. Also added explicit `publish()` return-value logging so
+  a future recurrence is immediately diagnosable from the boot log alone.
+  Confirmed fixed on a real device with no fallback discovery to hide behind
+  this time. Closes #23.
+
 ## [v2.4.0] - 2026-08-10
 
 ### Added
