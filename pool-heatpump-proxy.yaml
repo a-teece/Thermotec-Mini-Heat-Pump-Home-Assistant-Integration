@@ -2019,3 +2019,17 @@ interval:
   - interval: 30s
     then:
       - script.execute: poll_heat_pump
+      # ── Temporary: repeat the 1-Wire boot-scan report here too ────────────
+      # The same water_temp_debug line published from mqtt: on_connect isn't
+      # showing up at all — on_connect is a congested moment (discovery +
+      # retained-state publishes all firing at once; note the "mqtt took a
+      # long time" warnings right at connect), and MQTT log transport can
+      # silently drop a line under that backpressure. Repeating it here, once
+      # per 30s poll, decouples it from that burst so it gets more chances to
+      # actually reach the log stream. Remove alongside the on_connect copy.
+      - lambda: |-
+          auto devices = id(water_temp_bus)->get_devices();
+          ESP_LOGI("water_temp_debug", "one_wire boot scan found %zu device(s) on ${water_temp_sensor_pin}", devices.size());
+          for (auto addr : devices) {
+            ESP_LOGI("water_temp_debug", "  0x%016llX", (unsigned long long) addr);
+          }
