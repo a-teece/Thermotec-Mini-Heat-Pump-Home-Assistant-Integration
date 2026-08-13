@@ -544,10 +544,11 @@ mqtt:
     # same boot-time scan) after MQTT is up, so it's actually observable.
     # Remove once the Pool Water Temperature investigation is resolved.
     - lambda: |-
+        ESP_LOGI("main", "WTP_DEBUG: on_connect diagnostic lambda is running");
         auto devices = id(water_temp_bus)->get_devices();
-        ESP_LOGI("water_temp_debug", "one_wire boot scan found %zu device(s) on ${water_temp_sensor_pin}", devices.size());
+        ESP_LOGI("main", "WTP_DEBUG: one_wire boot scan found %d device(s) on ${water_temp_sensor_pin}", (int) devices.size());
         for (auto addr : devices) {
-          ESP_LOGI("water_temp_debug", "  0x%016llX", (unsigned long long) addr);
+          ESP_LOGI("main", "WTP_DEBUG:   0x%08X%08X", (unsigned int) (addr >> 32), (unsigned int) (addr & 0xFFFFFFFF));
         }
     # ── Hand-published discovery for Mode + Target Temperature ──────────────
     # See the publish_hand_rolled_discovery script (Scripts section) for the
@@ -2028,8 +2029,9 @@ interval:
       # per 30s poll, decouples it from that burst so it gets more chances to
       # actually reach the log stream. Remove alongside the on_connect copy.
       - lambda: |-
+          ESP_LOGI("main", "WTP_DEBUG: interval diagnostic lambda is running");
           auto devices = id(water_temp_bus)->get_devices();
-          ESP_LOGI("water_temp_debug", "one_wire boot scan found %zu device(s) on ${water_temp_sensor_pin}", devices.size());
+          ESP_LOGI("main", "WTP_DEBUG: one_wire boot scan found %d device(s) on ${water_temp_sensor_pin}", (int) devices.size());
           for (auto addr : devices) {
-            ESP_LOGI("water_temp_debug", "  0x%016llX", (unsigned long long) addr);
+            ESP_LOGI("main", "WTP_DEBUG:   0x%08X%08X", (unsigned int) (addr >> 32), (unsigned int) (addr & 0xFFFFFFFF));
           }
