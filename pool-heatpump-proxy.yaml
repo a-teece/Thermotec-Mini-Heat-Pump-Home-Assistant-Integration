@@ -535,6 +535,20 @@ mqtt:
   # whether to sleep (the API's api.connected role, now MQTT's).
   on_connect:
     - lambda: 'id(mqtt_connected) = true;'
+    # ── Temporary: report the 1-Wire boot-time scan result ──────────────────
+    # The one_wire bus's own "Found no devices!" / "Found devices:" log lines
+    # (components/one_wire) fire during setup(), before WiFi/MQTT exist — on
+    # an MQTT-only device (no native API) that output can never reach the log
+    # stream, since MQTT log transport only relays what's logged *after* the
+    # broker connects. This re-reports get_devices() (populated once, by that
+    # same boot-time scan) after MQTT is up, so it's actually observable.
+    # Remove once the Pool Water Temperature investigation is resolved.
+    - lambda: |-
+        auto devices = id(water_temp_bus)->get_devices();
+        ESP_LOGI("water_temp_debug", "one_wire boot scan found %zu device(s) on ${water_temp_sensor_pin}", devices.size());
+        for (auto addr : devices) {
+          ESP_LOGI("water_temp_debug", "  0x%016llX", (unsigned long long) addr);
+        }
     # ── Hand-published discovery for Mode + Target Temperature ──────────────
     # See the publish_hand_rolled_discovery script (Scripts section) for the
     # payloads and the full explanation of why these two are hand-published
