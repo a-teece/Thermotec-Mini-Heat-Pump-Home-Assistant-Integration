@@ -35,12 +35,28 @@ substitutions:
   device_name: pool-heatpump-proxy
   friendly_name: Pool Heatpump Proxy
 
+  # ── Required secrets ──────────────────────────────────────────────────────
+  # The upstream package (pool-heatpump-proxy.yaml) can't use `!secret`
+  # itself — it's fetched and compiled standalone by some remote/CI build
+  # servers, which never see your secrets.yaml. It only defines placeholder
+  # defaults for these; THIS block is what actually wires in your real
+  # values, via `!secret` lookups resolved against the secrets.yaml next to
+  # THIS file. Add the matching entries to your secrets.yaml — see the
+  # README "Configure secrets.yaml" — and do not remove any of these eight.
+  wifi_ssid: !secret wifi_ssid
+  wifi_password: !secret wifi_password
+  ap_fallback_password: !secret ap_fallback_password
+  ota_password: !secret ota_password
+  mqtt_broker: !secret mqtt_broker
+  mqtt_username: !secret mqtt_username
+  mqtt_password: !secret mqtt_password
+  pool_heatpump_proxy_device_mac_address: !secret pool_heatpump_proxy_device_mac_address
+
   # ── MQTT (port only) ──────────────────────────────────────────────────────
   # The device talks to Home Assistant over MQTT and publishes its own entities
   # via discovery — no HA helpers or template entities to create. The broker
-  # host and credentials go in secrets.yaml (`mqtt_broker`, `mqtt_username`,
-  # `mqtt_password`) — nothing to set here. Only override the port for a
-  # non-standard broker port (default 1883):
+  # host and credentials are the mqtt_* secrets set above. Only override the
+  # port here, for a non-standard broker port (default 1883):
   # mqtt_port: "1883"
 
   # ── Protocol component version (optional) ─────────────────────────────────

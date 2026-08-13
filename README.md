@@ -152,6 +152,20 @@ Instead of copying the ~1,800-line YAML, you create a tiny device file that pull
 substitutions:
   device_name: pool-heatpump-proxy
   friendly_name: Pool Heatpump Proxy
+
+  # Required — see step 3 below. The upstream package can't use `!secret`
+  # itself (some remote/CI build servers compile it standalone, with no
+  # secrets.yaml of their own), so it only has placeholder defaults. This is
+  # what wires in your real values.
+  wifi_ssid: !secret wifi_ssid
+  wifi_password: !secret wifi_password
+  ap_fallback_password: !secret ap_fallback_password
+  ota_password: !secret ota_password
+  mqtt_broker: !secret mqtt_broker
+  mqtt_username: !secret mqtt_username
+  mqtt_password: !secret mqtt_password
+  pool_heatpump_proxy_device_mac_address: !secret pool_heatpump_proxy_device_mac_address
+
   # Override any other substitutions here (HA entity IDs, board, sleep
   # schedule…). Anything you don't set uses the upstream default.
 
@@ -163,7 +177,9 @@ packages:
     refresh: 1d
 ```
 
-Your `secrets.yaml` (next step) is read from your own ESPHome install — secrets are **never** pulled from GitHub. See [`example-device.yaml`](./example-device.yaml) for the fully-commented version with every override listed.
+Your `secrets.yaml` (next step) is read from your own ESPHome install — secrets are **never** pulled from GitHub. The `!secret` lookups above live in *this* file, not the upstream package, precisely so that's true. See [`example-device.yaml`](./example-device.yaml) for the fully-commented version with every override listed.
+
+> **If you already have a device file from before this substitutions block existed:** add the eight `wifi_ssid` … `pool_heatpump_proxy_device_mac_address` lines shown above to its `substitutions:` block and recompile. Without them, the upstream package silently falls back to its own placeholder values (e.g. a WiFi SSID of `CHANGE_ME`) and the device will fail to come back online.
 
 > **Versions.** The `ref:` field selects which version of the firmware you compile against:
 > - **`main`** — the latest **stable** release. Recommended for most users.
@@ -174,11 +190,11 @@ Your `secrets.yaml` (next step) is read from your own ESPHome install — secret
 
 #### Option B — Copy the YAML manually
 
-If you prefer to vendor the firmware yourself (e.g. to make local edits), copy `pool-heatpump-proxy.yaml` into your ESPHome configuration directory, or paste its contents directly into the ESPHome dashboard editor. You will need to re-copy it to pick up upstream fixes.
+If you prefer to vendor the firmware yourself (e.g. to make local edits), copy `pool-heatpump-proxy.yaml` into your ESPHome configuration directory, or paste its contents directly into the ESPHome dashboard editor. You will need to re-copy it to pick up upstream fixes. Since your copy becomes your own top-level config file, you can freely replace its placeholder `wifi_ssid: "CHANGE_ME"`-style substitution defaults with `!secret` lookups directly, instead of adding the separate substitutions block Option A uses.
 
 ### 3. Configure `secrets.yaml`
 
-Add the following entries to your ESPHome `secrets.yaml` file (accessible from the ESPHome dashboard via the top-right menu):
+Add the following entries to your ESPHome `secrets.yaml` file (accessible from the ESPHome dashboard via the top-right menu). If you're using Option A (remote package), these are the values the `!secret` lookups in your device file's `substitutions:` block (step 2) resolve to:
 
 ```yaml
 wifi_ssid: "your WiFi network name"

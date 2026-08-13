@@ -24,6 +24,30 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Fixed
+
+- **`pool-heatpump-proxy.yaml` could not be compiled on a remote/CI build
+  server.** All eight credentials (`wifi_ssid`, `wifi_password`,
+  `ap_fallback_password`, `ota_password`, `mqtt_broker`, `mqtt_username`,
+  `mqtt_password`, `pool_heatpump_proxy_device_mac_address`) were referenced
+  with `!secret` directly inside the package file. That resolves fine when
+  ESPHome falls back to the *top-level* config's `secrets.yaml` (the normal
+  case when consuming it via `example-device.yaml`'s `packages:`), but
+  anything that compiles `pool-heatpump-proxy.yaml` itself as the top-level
+  file — a third-party remote build server, or previously this repo's own CI
+  (masked by a throwaway `secrets.yaml`) — has no `secrets.yaml` to fall
+  back to and fails outright with "Secret ... not defined". The eight
+  credentials are now substitutions with placeholder defaults in the
+  package, matching ESPHome's documented guidance that remote packages
+  cannot contain `!secret` lookups.
+  **Action required:** if you have an existing device file using the remote
+  package (Option A in the README), add the eight `!secret` lines now shown
+  in [`example-device.yaml`](./example-device.yaml)'s `substitutions:` block
+  to your own device file and recompile. Without them, the values silently
+  fall back to the package's own placeholders (e.g. WiFi SSID `CHANGE_ME`)
+  and the device will fail to reconnect. No `secrets.yaml` changes are
+  needed — the same eight keys were already required there.
+
 ## [v2.4.1] - 2026-08-13
 
 ### Fixed

@@ -27,25 +27,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The config pulls every credential from secrets.yaml via !secret, so a
-      # compile needs the file present. These are throwaway CI values, never the
-      # real device secrets — the build only needs them to be well-formed:
-      #   * the API encryption key must be base64-encoded 32 bytes
-      #   * the device MAC must be a valid XX:XX:XX:XX:XX:XX address
-      #   * the AP fallback password must be at least 8 characters
-      - name: Generate throwaway secrets.yaml
-        run: |
-          cat > secrets.yaml <<EOF
-          wifi_ssid: "ci-ssid"
-          wifi_password: "ci-wifi-password"
-          ap_fallback_password: "ci-fallback-password"
-          ota_password: "ci-ota-password"
-          pool_heatpump_proxy_api_key: "$(openssl rand -base64 32)"
-          pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
-          mqtt_broker: "ci-broker.local"
-          mqtt_username: "ci-mqtt-user"
-          mqtt_password: "ci-mqtt-password"
-          EOF
+      # Deliberately no secrets.yaml is generated here. pool-heatpump-proxy.yaml
+      # must compile standalone with NO secrets.yaml present — it's a remote
+      # ESPHome package, fetched and compiled directly (as the top-level file)
+      # by third-party build servers that never see a consumer's secrets.yaml.
+      # Every credential is a substitution with a placeholder default instead
+      # of `!secret` (see CLAUDE.md "Distribution & releases"); this compile
+      # succeeding with no secrets.yaml anywhere in the checkout is what
+      # proves that stays true. If this step ever needs a secrets.yaml again,
+      # that's a regression, not a missing fixture.
 
       # The firmware fetches the `phnix` external component from this repo via
       # external_components at the `phnix_components_ref` substitution (default
