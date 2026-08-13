@@ -164,7 +164,10 @@ substitutions:
   mqtt_broker: !secret mqtt_broker
   mqtt_username: !secret mqtt_username
   mqtt_password: !secret mqtt_password
-  pool_heatpump_proxy_device_mac_address: !secret pool_heatpump_proxy_device_mac_address
+
+  # Required — your heat pump's BLE MAC address (step 1). NOT a secret, so
+  # it's a plain value rather than a secrets.yaml/!secret lookup:
+  pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
 
   # Override any other substitutions here (HA entity IDs, board, sleep
   # schedule…). Anything you don't set uses the upstream default.
@@ -179,7 +182,7 @@ packages:
 
 Your `secrets.yaml` (next step) is read from your own ESPHome install — secrets are **never** pulled from GitHub. The `!secret` lookups above live in *this* file, not the upstream package, precisely so that's true. See [`example-device.yaml`](./example-device.yaml) for the fully-commented version with every override listed.
 
-> **If you already have a device file from before this substitutions block existed:** add the eight `wifi_ssid` … `pool_heatpump_proxy_device_mac_address` lines shown above to its `substitutions:` block and recompile. Without them, the upstream package silently falls back to its own placeholder values (e.g. a WiFi SSID of `CHANGE_ME`) and the device will fail to come back online.
+> **If you already have a device file from before this substitutions block existed:** add all eight `wifi_ssid` … `pool_heatpump_proxy_device_mac_address` lines shown above (seven `!secret` lookups plus the plain MAC address) to its `substitutions:` block and recompile. Without them, the upstream package silently falls back to its own placeholder values (e.g. a WiFi SSID of `CHANGE_ME`) and the device will fail to come back online.
 
 > **Versions.** The `ref:` field selects which version of the firmware you compile against:
 > - **`main`** — the latest **stable** release. Recommended for most users.
@@ -201,11 +204,14 @@ wifi_ssid: "your WiFi network name"
 wifi_password: "your WiFi network password"
 ap_fallback_password: "a strong password for the fallback hotspot"
 ota_password: "a strong password for OTA updates"
-pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
 mqtt_broker: "homeassistant.local"        # or your broker's IP, e.g. 192.168.1.x
 mqtt_username: "your MQTT broker username"
 mqtt_password: "your MQTT broker password"
 ```
+
+> Your heat pump's BLE MAC address is **not** in this list — it isn't a
+> secret, so it's set as a plain substitution directly in your device file
+> instead (step 2 above), not in `secrets.yaml`.
 
 > **MQTT:** the device talks to Home Assistant over MQTT (e.g. the Home
 > Assistant Mosquitto add-on — see [MQTT setup](#5-set-up-mqtt) below). All the
@@ -227,7 +233,7 @@ After flashing, watch the device logs for the line:
 
 This confirms the BLE poll completed successfully and entities will start populating in HA.
 
-> **If you could not find the MAC address in step 1:** Leave `pool_heatpump_proxy_device_mac_address` as a placeholder and flash. The ESPHome BLE tracker will log nearby Bluetooth devices — look for an entry named `BLUENRG-XXXXXX`. The MAC address shown alongside it is your heat pump's. Update `secrets.yaml` and reflash.
+> **If you could not find the MAC address in step 1:** Leave `pool_heatpump_proxy_device_mac_address` as a placeholder and flash. The ESPHome BLE tracker will log nearby Bluetooth devices — look for an entry named `BLUENRG-XXXXXX`. The MAC address shown alongside it is your heat pump's. Update it in your device file and reflash.
 
 ### 5. Set up MQTT
 
@@ -364,10 +370,10 @@ Both are tunable via `substitutions:` in your device file:
 ## Troubleshooting
 
 **Entities read `unknown` after first flash**
-Entities stay `unknown` until the first successful BLE poll completes. Watch the ESPHome logs for `[heatpump] Heat Pump power=… mode=…` — if that line appears, polling is working and entities will populate shortly. If it never appears, check that the BLE MAC address in `secrets.yaml` is correct and that the AquaTemp app is not holding the BLE connection.
+Entities stay `unknown` until the first successful BLE poll completes. Watch the ESPHome logs for `[heatpump] Heat Pump power=… mode=…` — if that line appears, polling is working and entities will populate shortly. If it never appears, check that the BLE MAC address in your device file is correct and that the AquaTemp app is not holding the BLE connection.
 
 **The ESP never connects to the heat pump**
-Two common causes: the MAC address in `secrets.yaml` is wrong (check it matches the address from the AquaTemp app exactly, including colons), or the AquaTemp app currently has an active BLE connection to the heat pump. Close the app completely and wait for the ESP's next connection attempt.
+Two common causes: the MAC address in your device file is wrong (check it matches the address from the AquaTemp app exactly, including colons), or the AquaTemp app currently has an active BLE connection to the heat pump. Close the app completely and wait for the ESP's next connection attempt.
 
 **OTA flash hangs or the device is unreachable for OTA**
 The device enters deep sleep roughly 20–30 seconds after booting. Turn the **Prevent Deep Sleep** switch **on** in HA, wait for the next wake cycle to pick it up, then attempt the OTA flash. See [Sleep mode and OTA](#sleep-mode-and-ota-updates).

@@ -42,7 +42,7 @@ substitutions:
   # defaults for these; THIS block is what actually wires in your real
   # values, via `!secret` lookups resolved against the secrets.yaml next to
   # THIS file. Add the matching entries to your secrets.yaml — see the
-  # README "Configure secrets.yaml" — and do not remove any of these eight.
+  # README "Configure secrets.yaml" — and do not remove any of these seven.
   wifi_ssid: !secret wifi_ssid
   wifi_password: !secret wifi_password
   ap_fallback_password: !secret ap_fallback_password
@@ -50,7 +50,15 @@ substitutions:
   mqtt_broker: !secret mqtt_broker
   mqtt_username: !secret mqtt_username
   mqtt_password: !secret mqtt_password
-  pool_heatpump_proxy_device_mac_address: !secret pool_heatpump_proxy_device_mac_address
+
+  # ── Heat pump BLE MAC address (required) ──────────────────────────────────
+  # NOT a secret — just per-installation config, so it's a plain value here
+  # rather than a secrets.yaml/!secret lookup. Format AA:BB:CC:DD:EE:FF; find
+  # it via the AquaTemp app's device info screen (see the README § "Find your
+  # heat pump's BLE MAC address"). Can't find it there? Leave the placeholder
+  # below and flash anyway — the ESPHome logs will show nearby BLE devices;
+  # look for one named BLUENRG-XXXXXX, then update this and reflash.
+  pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
 
   # ── MQTT (port only) ──────────────────────────────────────────────────────
   # The device talks to Home Assistant over MQTT and publishes its own entities

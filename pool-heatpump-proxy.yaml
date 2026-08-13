@@ -5,7 +5,6 @@
 #  wifi_password: "your WiFi network key"
 #  ap_fallback_password: "a strong password for the fallback WiFi hotspot, e.g. my_secure_fallback_password"
 #  ota_password: "a strong password for OTA updates, e.g. my_very_secure_password"
-#  pool_heatpump_proxy_device_mac_address: "your heat pump's BLE MAC address, e.g. AA:BB:CC:DD:EE:FF"
 #  mqtt_broker: "your MQTT broker host, e.g. homeassistant.local or 192.168.1.x"
 #  mqtt_username: "your MQTT broker username"
 #  mqtt_password: "your MQTT broker password"
@@ -19,6 +18,11 @@
 # device file overrides these with real `!secret` lookups against your own
 # secrets.yaml — see example-device.yaml / the README "Configure
 # secrets.yaml" for the exact substitutions block to copy.
+#
+# Your heat pump's BLE MAC address (pool_heatpump_proxy_device_mac_address,
+# below) is NOT a secret — it's just per-installation config, like a GPIO
+# pin. Set it directly as a plain substitution in your own device file
+# instead; see example-device.yaml.
 
 # ─── Globals ────────────────────────────────────────────────────────────────
 substitutions:
@@ -35,6 +39,13 @@ substitutions:
   mqtt_broker: "CHANGE_ME"
   mqtt_username: "CHANGE_ME"
   mqtt_password: "CHANGE_ME"
+
+  # ─── Heat pump BLE MAC address (required) ──────────────────────────────────
+  # Not a secret — just per-installation config, like a GPIO pin. This is
+  # still a placeholder default (this file must stay standalone-compilable —
+  # see the header comment above), but your own device file should set the
+  # real value directly, no `!secret` needed. See the README "Find your heat
+  # pump's BLE MAC address" / example-device.yaml.
   pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
 
   # Git ref the `phnix` protocol component is fetched from (external_components
