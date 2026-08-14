@@ -574,21 +574,6 @@ mqtt:
   # whether to sleep (the API's api.connected role, now MQTT's).
   on_connect:
     - lambda: 'id(mqtt_connected) = true;'
-    # ── Temporary: report the 1-Wire boot-time scan result ──────────────────
-    # The one_wire bus's own "Found no devices!" / "Found devices:" log lines
-    # (components/one_wire) fire during setup(), before WiFi/MQTT exist — on
-    # an MQTT-only device (no native API) that output can never reach the log
-    # stream, since MQTT log transport only relays what's logged *after* the
-    # broker connects. This re-reports get_devices() (populated once, by that
-    # same boot-time scan) after MQTT is up, so it's actually observable.
-    # Remove once the Pool Water Temperature investigation is resolved.
-    - lambda: |-
-        ESP_LOGI("main", "WTP_DEBUG: on_connect diagnostic lambda is running");
-        auto devices = id(water_temp_bus)->get_devices();
-        ESP_LOGI("main", "WTP_DEBUG: one_wire boot scan found %d device(s) on ${water_temp_sensor_pin}", (int) devices.size());
-        for (auto addr : devices) {
-          ESP_LOGI("main", "WTP_DEBUG:   0x%08X%08X", (unsigned int) (addr >> 32), (unsigned int) (addr & 0xFFFFFFFF));
-        }
     # ── Hand-published discovery for Mode + Target Temperature ──────────────
     # See the publish_hand_rolled_discovery script (Scripts section) for the
     # payloads and the full explanation of why these two are hand-published
@@ -2102,18 +2087,3 @@ interval:
   - interval: 30s
     then:
       - script.execute: poll_heat_pump
-      # ── Temporary: repeat the 1-Wire boot-scan report here too ────────────
-      # The same water_temp_debug line published from mqtt: on_connect isn't
-      # showing up at all — on_connect is a congested moment (discovery +
-      # retained-state publishes all firing at once; note the "mqtt took a
-      # long time" warnings right at connect), and MQTT log transport can
-      # silently drop a line under that backpressure. Repeating it here, once
-      # per 30s poll, decouples it from that burst so it gets more chances to
-      # actually reach the log stream. Remove alongside the on_connect copy.
-      - lambda: |-
-          ESP_LOGI("main", "WTP_DEBUG: interval diagnostic lambda is running");
-          auto devices = id(water_temp_bus)->get_devices();
-          ESP_LOGI("main", "WTP_DEBUG: one_wire boot scan found %d device(s) on ${water_temp_sensor_pin}", (int) devices.size());
-          for (auto addr : devices) {
-            ESP_LOGI("main", "WTP_DEBUG:   0x%08X%08X", (unsigned int) (addr >> 32), (unsigned int) (addr & 0xFFFFFFFF));
-          }
