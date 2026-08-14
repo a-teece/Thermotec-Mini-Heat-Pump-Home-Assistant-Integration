@@ -24,6 +24,13 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Fixed
+
+- Silenced a harmless `-Wempty-body` compiler warning from ESPHome core's
+  `mqtt_component.cpp` (triggered by `logger: level: INFO` excluding the
+  `CONFIG` log level, which makes an internal `ESP_LOGCONFIG(...)` call
+  expand to nothing inside an unbraced `if`). No functional change.
+
 ## [v3.1.0] - 2026-08-14
 
 ### Added
