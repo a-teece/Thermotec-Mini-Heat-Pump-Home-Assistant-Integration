@@ -62,7 +62,7 @@ substitutions:
   # as part of cutting each release (see CLAUDE.md); matches the most recent
   # CHANGELOG version heading the build includes. NOT a consumer knob — do not
   # override it in your device file, or the sensor will misreport.
-  firmware_version: "3.0.0"
+  firmware_version: "3.1.0"
 
   # MQTT broker port (the device's Home Assistant transport — see CHANGELOG /
   # the v2.0.0 MQTT transition). The broker host and credentials live in
@@ -1066,9 +1066,27 @@ sensor:
   # switch's turn_off_action) guarantee a fresh reading before a short sleep
   # wake — 30s alone isn't reliably reached within the ~20-30s wake window
   # (same reasoning as Battery Voltage's manual update).
+  #
+  # No `index`/`address` given deliberately: this bus is dedicated to exactly
+  # one optional device, so ESPHome resolves the sole device present without
+  # either (they're mutually exclusive in the one_wire schema — cv.Exclusive —
+  # so this can't be made a plain substitution with a "not set" default that
+  # falls back to this same auto-resolution; an empty/placeholder default
+  # would just fail address validation for everyone who hasn't overridden it).
+  # If the boot-time bus scan is unreliable on your wiring, you can pin the
+  # exact device once you know its 64-bit ROM address (read it from the
+  # "Water Temp Sensor Address" diagnostic sensor below) by overriding this
+  # sensor from your own device file with ESPHome's `!extend`:
+  #
+  #   sensor:
+  #     - id: !extend pool_water_temp
+  #       address: 0x1234567890ABCDEF   # from "Water Temp Sensor Address"
+  #
+  # This switches the 1-Wire transaction from Search ROM (bus-wide discovery,
+  # must succeed once at boot) to Match ROM (addresses your probe directly),
+  # which is materially more reliable, not just faster.
   - platform: dallas_temp
     one_wire_id: water_temp_bus
-    index: 0
     name: "Pool Water Temperature"
     id: pool_water_temp
     unit_of_measurement: "°C"
@@ -1540,6 +1558,31 @@ text_sensor:
     entity_category: diagnostic
     update_interval: never
     lambda: 'return std::string("${firmware_version}");'
+
+  # ─── Water Temp Sensor Address ────────────────────────────────────────────
+  # Diagnostic only — publishes the 64-bit ROM address of whatever the 1-Wire
+  # boot scan found on ${water_temp_sensor_pin} (empty/unavailable if nothing
+  # is wired, or if the scan didn't find the probe this boot). Exists so a new
+  # installation can discover its probe's address without a custom debug
+  # build: once known, pin it via `!extend` on the Pool Water Temperature
+  # sensor above (see its comment) to skip the boot-time scan on future boots.
+  # update_interval matches Pool Water Temperature's own cadence.
+  - platform: template
+    name: "Water Temp Sensor Address"
+    id: water_temp_sensor_address_diag
+    icon: "mdi:identifier"
+    entity_category: diagnostic
+    update_interval: 30s
+    lambda: |-
+      auto devices = id(water_temp_bus)->get_devices();
+      if (devices.empty()) {
+        return {};
+      }
+      char buf[19];
+      snprintf(buf, sizeof(buf), "0x%08X%08X",
+               (unsigned int) (devices[0] >> 32),
+               (unsigned int) (devices[0] & 0xFFFFFFFF));
+      return std::string(buf);
 
   # ─── Current Mode (read from BLE notify) ─────────────────────────────────
   # Reflects the heat pump's actual mode as reported via BLE. Updated by the
