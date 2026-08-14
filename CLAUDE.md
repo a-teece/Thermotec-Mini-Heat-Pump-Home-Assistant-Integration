@@ -350,10 +350,11 @@ secrets point the device at it.
 - A `secrets.yaml` is required. Needed keys (see the comment block at the
   top of the YAML for the full list with examples):
   `wifi_ssid`, `wifi_password`, `ap_fallback_password`, `ota_password`,
-  `mqtt_broker`, `mqtt_username`, `mqtt_password`,
-  `pool_heatpump_proxy_device_mac_address`. (The old
+  `mqtt_broker`, `mqtt_username`, `mqtt_password`. (The old
   `pool_heatpump_proxy_api_key` was for native-API encryption and was removed
-  in v2.0.0 — the transport is MQTT now.)
+  in v2.0.0 — the transport is MQTT now.) `pool_heatpump_proxy_device_mac_address`
+  is *not* one of these — it's a required but non-secret substitution set
+  directly in your device file (see "Distribution & releases" below).
 - After flashing, confirm a clean compile and watch the device logs for the
   `[heatpump] Heat Pump power=… mode=…` line — that confirms the poll
   parser is running and entities will populate. Entities read `unknown`
@@ -373,9 +374,44 @@ to keep in mind when editing:
   substitution breaks every downstream device file. Add new substitutions
   with sensible defaults instead, and mirror them into `example-device.yaml`'s
   commented override list and the README.
-- **`!secret` resolves on the consumer's machine**, not from GitHub — never
-  commit a `secrets.yaml`, and keep the required-secrets list in the YAML
-  header, README, and this file consistent.
+- **`pool-heatpump-proxy.yaml` itself must never contain `!secret`.** ESPHome
+  resolves a `!secret` tag by first looking for a `secrets.yaml` next to the
+  file the tag is *written in*, and only falls back to the *top-level*
+  config's directory when that file isn't itself the top-level config. A
+  package fetched via `packages:` normally survives on that fallback — it
+  lands on the consumer's own device file's directory, where their real
+  `secrets.yaml` lives. But anything that compiles `pool-heatpump-proxy.yaml`
+  *directly* as the top-level file — a third-party remote/CI build server,
+  or (until this was fixed) this repo's own CI — has no fallback to reach
+  for, because the file *is* the top-level config in that case, and fails
+  outright with "secrets.yaml not found". So every credential (`wifi_ssid`,
+  `wifi_password`, `ap_fallback_password`, `ota_password`, `mqtt_broker`,
+  `mqtt_username`, `mqtt_password`) is a **substitution with an obvious
+  placeholder default** here instead — matching ESPHome's own guidance that
+  remote packages cannot contain `!secret` lookups. The real values are
+  wired in by `example-device.yaml`'s own `substitutions:` block, which
+  overrides those defaults with `!secret` lookups that resolve locally, next
+  to the consumer's real `secrets.yaml` (confirmed empirically against the
+  installed `esphome` package, not just the docs — plain same-named
+  substitutions in the consumer's top-level file do override a package's
+  substitution defaults, `!secret` included). Never commit a `secrets.yaml`
+  to this repo, and keep the required-secrets list in the YAML header
+  comment, `example-device.yaml`, the README, and this file consistent —
+  this is why CI no longer fabricates a throwaway `secrets.yaml` before
+  compiling `pool-heatpump-proxy.yaml`: that compile succeeding with **no**
+  `secrets.yaml` present is what proves this stays fixed.
+  `pool_heatpump_proxy_device_mac_address` gets the same placeholder-default
+  treatment (this file must stay standalone-compilable) but is deliberately
+  *not* part of that secrets list: a BLE MAC address isn't sensitive, it's
+  just per-installation config (like `water_temp_sensor_pin`), so
+  `example-device.yaml` sets it as a plain substitution value rather than
+  routing it through `secrets.yaml`/`!secret`. It only ever lived in
+  `secrets.yaml` so the maintainer could publish a complete single-file
+  device YAML (the pre-remote-package, copy/paste distribution model)
+  without leaking their own hardware's MAC address — that reason evaporated
+  once the remote-package model (this section) made `example-device.yaml`,
+  not the published `pool-heatpump-proxy.yaml`, the file that carries
+  per-installation config. Don't move it back into `secrets.yaml`.
 
 **Release model (decided with the maintainer):**
 

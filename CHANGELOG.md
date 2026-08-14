@@ -24,6 +24,45 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v3.0.0] - 2026-08-14
+
+### Fixed
+
+- **`pool-heatpump-proxy.yaml` could not be compiled on a remote/CI build
+  server.** All seven credentials (`wifi_ssid`, `wifi_password`,
+  `ap_fallback_password`, `ota_password`, `mqtt_broker`, `mqtt_username`,
+  `mqtt_password`) were referenced with `!secret` directly inside the
+  package file. That resolves fine when ESPHome falls back to the
+  *top-level* config's `secrets.yaml` (the normal case when consuming it via
+  `example-device.yaml`'s `packages:`), but anything that compiles
+  `pool-heatpump-proxy.yaml` itself as the top-level file — a third-party
+  remote build server, or previously this repo's own CI (masked by a
+  throwaway `secrets.yaml`) — has no `secrets.yaml` to fall back to and
+  fails outright with "Secret ... not defined". The seven credentials are
+  now substitutions with placeholder defaults in the package, matching
+  ESPHome's documented guidance that remote packages cannot contain
+  `!secret` lookups.
+
+  The heat pump's BLE MAC address (`pool_heatpump_proxy_device_mac_address`)
+  moves out of `secrets.yaml` at the same time. It was never actually
+  sensitive — it only lived there so a complete device YAML could be
+  published without leaking the maintainer's own hardware's MAC address,
+  which stopped being necessary once the remote-package model made
+  `example-device.yaml` (not the published package) the file carrying
+  per-installation config. It's now a plain required substitution instead.
+
+  **Action required:** if you have an existing device file using the remote
+  package (Option A in the README), add all eight lines now shown in
+  [`example-device.yaml`](./example-device.yaml)'s `substitutions:` block —
+  seven `!secret` lookups plus the plain
+  `pool_heatpump_proxy_device_mac_address` value — to your own device file
+  and recompile. Without them, the values silently fall back to the
+  package's own placeholders (e.g. WiFi SSID `CHANGE_ME`) and the device
+  will fail to reconnect. Your `secrets.yaml` needs no new entries — the
+  seven credential keys were already required there — and you can delete
+  `pool_heatpump_proxy_device_mac_address` from it; it's no longer read from
+  there, though leaving it is harmless.
+
 ## [v2.4.1] - 2026-08-13
 
 ### Fixed

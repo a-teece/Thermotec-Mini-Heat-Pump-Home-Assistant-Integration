@@ -1,20 +1,52 @@
-# ─── Globals ────────────────────────────────────────────────────────────────
 # ─── Required Secrets ───────────────────────────────────────────────────────
-# These secrets are required in your secrets.yaml file which can easily be
-# edited in the ESP Home dashboard (top right).
+# These secrets are required in your secrets.yaml file, which can easily be
+# edited from the ESPHome dashboard (top right).
 #  wifi_ssid: "your WiFi network name"
 #  wifi_password: "your WiFi network key"
 #  ap_fallback_password: "a strong password for the fallback WiFi hotspot, e.g. my_secure_fallback_password"
 #  ota_password: "a strong password for OTA updates, e.g. my_very_secure_password"
-#  pool_heatpump_proxy_device_mac_address: "your heat pump's BLE MAC address, e.g. AA:BB:CC:DD:EE:FF"
 #  mqtt_broker: "your MQTT broker host, e.g. homeassistant.local or 192.168.1.x"
 #  mqtt_username: "your MQTT broker username"
 #  mqtt_password: "your MQTT broker password"
+#
+# This file must NOT reference them with `!secret` — some remote/CI build
+# servers (including this repo's own CI) fetch and compile this file
+# standalone, with no `secrets.yaml` of their own and no fallback available
+# (ESPHome only falls back to the *top-level* config's secrets.yaml when the
+# file with the `!secret` tag isn't itself the top-level config). Below,
+# they're substitutions with obvious placeholder defaults instead. Your own
+# device file overrides these with real `!secret` lookups against your own
+# secrets.yaml — see example-device.yaml / the README "Configure
+# secrets.yaml" for the exact substitutions block to copy.
+#
+# Your heat pump's BLE MAC address (pool_heatpump_proxy_device_mac_address,
+# below) is NOT a secret — it's just per-installation config, like a GPIO
+# pin. Set it directly as a plain substitution in your own device file
+# instead; see example-device.yaml.
 
 # ─── Globals ────────────────────────────────────────────────────────────────
 substitutions:
   device_name: pool-heatpump-proxy
   friendly_name: Pool Heatpump Proxy
+
+  # ─── Required secrets ──────────────────────────────────────────────────────
+  # Placeholders only — see the header comment above. Do not edit these
+  # defaults; override them from your own device file instead.
+  wifi_ssid: "CHANGE_ME"
+  wifi_password: "CHANGE_ME"
+  ap_fallback_password: "CHANGE_ME_PASSWORD"
+  ota_password: "CHANGE_ME_PASSWORD"
+  mqtt_broker: "CHANGE_ME"
+  mqtt_username: "CHANGE_ME"
+  mqtt_password: "CHANGE_ME"
+
+  # ─── Heat pump BLE MAC address (required) ──────────────────────────────────
+  # Not a secret — just per-installation config, like a GPIO pin. This is
+  # still a placeholder default (this file must stay standalone-compilable —
+  # see the header comment above), but your own device file should set the
+  # real value directly, no `!secret` needed. See the README "Find your heat
+  # pump's BLE MAC address" / example-device.yaml.
+  pool_heatpump_proxy_device_mac_address: "AA:BB:CC:DD:EE:FF"
 
   # Git ref the `phnix` protocol component is fetched from (external_components
   # below). Defaults to the stable `main`; point it at a feature branch to test
@@ -30,7 +62,7 @@ substitutions:
   # as part of cutting each release (see CLAUDE.md); matches the most recent
   # CHANGELOG version heading the build includes. NOT a consumer knob — do not
   # override it in your device file, or the sensor will misreport.
-  firmware_version: "2.4.1"
+  firmware_version: "3.0.0"
 
   # MQTT broker port (the device's Home Assistant transport — see CHANGELOG /
   # the v2.0.0 MQTT transition). The broker host and credentials live in
@@ -501,10 +533,10 @@ logger:
 # set on each control switch/number/select — see the Control entities section.
 mqtt:
   id: mqtt_client
-  broker: !secret mqtt_broker
+  broker: ${mqtt_broker}
   port: ${mqtt_port}
-  username: !secret mqtt_username
-  password: !secret mqtt_password
+  username: ${mqtt_username}
+  password: ${mqtt_password}
   discovery: true
   discovery_retain: true
   reboot_timeout: 0s
@@ -572,12 +604,12 @@ mqtt:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    password: ${ota_password}
 
 # ─── WiFi (with captive portal fallback) ────────────────────────────────────
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  ssid: ${wifi_ssid}
+  password: ${wifi_password}
   # Disable WiFi modem power-save. The ESP32 default is LIGHT (modem sleeps
   # between DTIM beacons), which delays MQTT keepalive/TCP packets and — with
   # BLE sharing the radio on the single-core C6 — causes the broker connection
@@ -589,7 +621,7 @@ wifi:
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: ${device_name}
-    password: !secret ap_fallback_password
+    password: ${ap_fallback_password}
 
 captive_portal:
 
@@ -637,7 +669,7 @@ esp32_ble_tracker:
     active: true
 
 ble_client:
-  - mac_address: !secret pool_heatpump_proxy_device_mac_address
+  - mac_address: ${pool_heatpump_proxy_device_mac_address}
     id: heatpump_ble
     auto_connect: true
     on_connect:

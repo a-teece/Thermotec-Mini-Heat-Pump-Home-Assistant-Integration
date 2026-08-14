@@ -1,0 +1,8 @@
+# ESPHome build/package cache (created by `esphome compile`/`config` locally)
+.esphome/
+
+# CMake build output for the phnix host unit tests
+tests/phnix/build/
+
+# Never commit real secrets — see CLAUDE.md "Distribution & releases"
+secrets.yaml
