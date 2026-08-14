@@ -62,7 +62,7 @@ substitutions:
   # as part of cutting each release (see CLAUDE.md); matches the most recent
   # CHANGELOG version heading the build includes. NOT a consumer knob — do not
   # override it in your device file, or the sensor will misreport.
-  firmware_version: "3.1.0"
+  firmware_version: "3.1.1"
 
   # MQTT broker port (the device's Home Assistant transport — see CHANGELOG /
   # the v2.0.0 MQTT transition). The broker host and credentials live in
