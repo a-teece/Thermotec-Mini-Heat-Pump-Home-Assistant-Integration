@@ -129,3 +129,14 @@ packages:
     # NOTE: if you change `ref:` away from `main`, also set the
     # `phnix_components_ref` substitution above to the same value, so the
     # protocol component is fetched from the matching ref.
+
+# ── Optional: pin the water temperature probe's known address ──────────────
+# Only relevant if you're using the water temperature probe above. The 1-Wire
+# address can't be a plain substitution (ESPHome's schema makes `index` and
+# `address` mutually exclusive, so there's no "not set" default that falls
+# back to auto-detection) — override it from here instead, once you know it.
+# Find your probe's address from the "Water Temp Sensor Address" diagnostic
+# entity after flashing with the probe wired, then uncomment and fill in:
+# sensor:
+#   - id: !extend pool_water_temp
+#     address: 0x1234567890ABCDEF

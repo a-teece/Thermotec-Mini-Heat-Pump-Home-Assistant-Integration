@@ -130,6 +130,14 @@ substitutions:
 
 If you don't want the entity at all (no probe, ever), you can just ignore/hide it in HA — same as the battery sensors on a non-battery board.
 
+**Reliability tip — pin the probe's known address.** By default the firmware finds your probe via a boot-time bus scan, which works but depends on that scan succeeding every boot. Once your probe has come online at least once, a diagnostic entity called **Water Temp Sensor Address** publishes its 64-bit ROM address. You can pin that exact address from your own device file (skipping the scan on future boots — more reliable, not just faster) using ESPHome's `!extend`:
+
+```yaml
+sensor:
+  - id: !extend pool_water_temp
+    address: 0x1234567890ABCDEF   # from "Water Temp Sensor Address"
+```
+
 ---
 
 ## Installation

@@ -24,6 +24,37 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+### Fixed
+
+- Silenced a harmless `-Wempty-body` compiler warning from ESPHome core's
+  `mqtt_component.cpp` (triggered by `logger: level: INFO` excluding the
+  `CONFIG` log level, which makes an internal `ESP_LOGCONFIG(...)` call
+  expand to nothing inside an unbraced `if`). No functional change.
+
+## [v3.1.0] - 2026-08-14
+
+### Added
+
+- **"Water Temp Sensor Address" diagnostic sensor**, and a documented way to
+  pin the external water-temperature probe's known 1-Wire address. Prompted
+  by a live installation where the boot-time bus scan for the optional
+  DS18B20 probe was intermittently failing to find the device — investigation
+  showed the scan (Search ROM) has to succeed fresh on every boot, so any
+  marginal wiring/connection makes the sensor unreliable even though the
+  probe and pin are otherwise fine. Once a probe has been found at least
+  once, this new diagnostic entity publishes its 64-bit ROM address; that
+  address can then be pinned from your own device file with ESPHome's
+  `!extend`, switching the 1-Wire transaction to Match ROM (addresses the
+  probe directly) instead of Search ROM (bus-wide discovery) — see the README
+  § "Optional: external water temperature probe" for the exact override.
+  This can't be a plain substitution: ESPHome's `one_wire` schema makes
+  `index` and `address` `cv.Exclusive`, so there's no "not set" default that
+  falls back to the existing auto-detection behaviour, which is why the base
+  `pool_water_temp` sensor definition itself is unchanged for everyone not
+  using the override — including the removal of the now-unnecessary
+  `index: 0` (single-device bus; neither `index` nor `address` is required
+  and both are now free for a device file to set via `!extend`).
+
 ## [v3.0.0] - 2026-08-14
 
 ### Fixed
