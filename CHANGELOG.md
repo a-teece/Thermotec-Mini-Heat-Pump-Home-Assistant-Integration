@@ -24,6 +24,8 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v3.0.0] - 2026-08-14
+
 ### Fixed
 
 - **`pool-heatpump-proxy.yaml` could not be compiled on a remote/CI build
