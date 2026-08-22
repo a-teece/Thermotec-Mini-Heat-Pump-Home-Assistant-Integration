@@ -24,6 +24,8 @@ Version numbers follow Semantic Versioning:
 
 ## [Unreleased]
 
+## [v3.1.1] - 2026-08-14
+
 ### Fixed
 
 - Silenced a harmless `-Wempty-body` compiler warning from ESPHome core's
